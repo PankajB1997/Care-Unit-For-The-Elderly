@@ -1,9 +1,7 @@
-/*****************************************************************************
- *   GPIO Speaker & Tone Example
- *
- *   CK Tham, EE2024
- *
- ******************************************************************************/
+/**
+ * Names: PANKAJ BHOOTRA (A0144919W), ZHAO HONGWEI (A0131838A)
+ * EE2024 Assignment 2
+ */
 
 #include "lpc17xx_pinsel.h"
 #include "lpc17xx_gpio.h"
