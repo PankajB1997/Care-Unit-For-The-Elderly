@@ -356,6 +356,7 @@ int main (void) {
             blink_blue_flag = 0;
             blink_red_flag = 0;
     		oled_putString(0, 0, (uint8_t *) "Stable State", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+    		oled_line(10, 0, 10, 10, OLED_COLOR_WHITE); //coordinates may need to be changed
     	}
     }
 }
