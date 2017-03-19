@@ -13,7 +13,7 @@
 #include "led7seg.h"
 #include "oled.h"
 
-//#include "rgb.h"
+#include "rgb.h"
 
 #define NOTE_PIN_HIGH() GPIO_SetValue(0, 1<<26);
 #define NOTE_PIN_LOW()  GPIO_ClearValue(0, 1<<26);
@@ -218,7 +218,8 @@ static void displayValOn7Seg(uint8_t sevenSegVal)
 
 int main (void) {
 
-    uint8_t btn1 = 1, flag = 1, sevenSegVal = 0;
+    uint8_t btn1 = 1, flag = 0, sevenSegVal = 0;
+    uint8_t lightSensorVal = 0, tempSensorVal = 0, accelerometerVal = 0;
 
     //init_i2c();
     init_GPIO();
@@ -234,15 +235,17 @@ int main (void) {
     while (1)
     {
     	/*
-    	btn1 = (GPIO_ReadValue(1) >> 31) & 0x01;
-
-        if (btn1 == 0 || flag==1)
+    	if (btn1 == 0 || flag==1)
         {
         	flag = 1;
             playSong(song);
             Timer0_Wait(1000);
         }
         */
+
+    	btn1 = (GPIO_ReadValue(1) >> 31) & 0x01;
+
+    	if (btn1 == 0) flag = !flag;
     	if (flag)
     	{
     		if(msTicks - sevenSegTime > 1000)
@@ -252,12 +255,17 @@ int main (void) {
         	    sevenSegTime = msTicks;
     	    }
             oled_putString(0, 0, (uint8_t *) "Monitor Mode", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+            /* Write code below to read in value of temperature sensor, light sensor and accelerometer and display it on the OLED screen */
+
+            /* Write above */
+
+
+
     	}
     	else
     	{
             led7seg_setChar('@', 0);
-    		oled_putString(0, 0, (uint8_t *) "Passive Mode", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+    		oled_putString(0, 0, (uint8_t *) "Stable State", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
     	}
     }
 }
-
