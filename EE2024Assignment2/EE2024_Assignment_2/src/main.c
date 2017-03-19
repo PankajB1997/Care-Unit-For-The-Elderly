@@ -6,6 +6,7 @@
 #include "lpc17xx_pinsel.h"
 #include "lpc17xx_gpio.h"
 #include "lpc17xx_i2c.h"
+#include "lpc17xx_uart.h"
 #include "lpc17xx_timer.h"
 #include "lpc17xx_ssp.h"
 #include "lpc17xx.h"
@@ -26,8 +27,13 @@
 
 #define TEMP_HIGH_WARNING 450
 #define LIGHT_LOW_WARNING 50
+#define RGB_RED 0x01
+#define RGB_BLUE 0x02
+#define RGB_RED_BLUE 0x03
+#define RGB_RESET 0x00
 
 uint32_t msTicks = 0;
+uint32_t sevenSegTime, mainTick, blueRedTicks, blueTicks, redTicks;
 
 // Interval in us
 static uint32_t notes[] = {
@@ -130,6 +136,54 @@ static void playSong(uint8_t *song) {
 
 static uint8_t * song = (uint8_t*)"C1.C1,D2,C2,F2,E4,";
 
+static void init_i2c(void)
+{
+		PINSEL_CFG_Type PinCfg;
+
+		/* Initialize I2C2 pin connect */
+		PinCfg.Funcnum = 2;
+		PinCfg.Pinnum = 10;
+		PinCfg.Portnum = 0;
+		PINSEL_ConfigPin(&PinCfg);
+		PinCfg.Pinnum = 11;
+		PINSEL_ConfigPin(&PinCfg);
+
+		// Initialize I2C peripheral
+		I2C_Init(LPC_I2C2, 100000);
+
+		/* Enable I2C1 operation */
+		I2C_Cmd(LPC_I2C2, ENABLE);
+}
+
+void pinsel_uart3(void) {
+	PINSEL_CFG_Type PinCfg;
+	PinCfg.Funcnum = 2;
+	PinCfg.Pinnum = 0;
+	PinCfg.Portnum = 0;
+	PINSEL_ConfigPin(&PinCfg);
+	PinCfg.Pinnum = 1;
+	PINSEL_ConfigPin(&PinCfg);
+}
+
+static void init_uart(void)
+{
+	UART_CFG_Type uartCfg;
+	uartCfg.Baud_rate = 115200;
+	uartCfg.Databits = UART_DATABIT_8;
+	uartCfg.Parity = UART_PARITY_NONE;
+	uartCfg.Stopbits = UART_STOPBIT_1;
+	//pin select for uart3
+	pinsel_uart3();
+	//supply power and setup working parts for uart3
+	UART_Init(LPC_UART3, &uartCfg);
+	//enable transmit for uart3
+	UART_TxCmd(LPC_UART3, ENABLE);
+}
+
+uint32_t getTicks() {
+	return msTicks;
+}
+
 static void init_GPIO(void)
 {
 	// Initialize button SW4
@@ -141,6 +195,15 @@ static void init_GPIO(void)
 	PinCfg.Pinnum = 31;
 	PINSEL_ConfigPin(&PinCfg);
 	GPIO_SetDir(1, 1<<31, 0);
+
+	// Initialize button SW3
+	PinCfg.Funcnum = 0;
+	PinCfg.OpenDrain = 0;
+	PinCfg.Pinmode = 0;
+	PinCfg.Portnum = 2;
+	PinCfg.Pinnum = 10;
+	PINSEL_ConfigPin(&PinCfg);
+	GPIO_SetDir(2, 1 << 10, 0);
 
     /* ---- Speaker ------> */
 //    GPIO_SetDir(2, 1<<0, 1);
@@ -201,40 +264,56 @@ void SysTick_Handler(void)
 	msTicks++;
 }
 
-static void displayValOn7Seg(uint8_t sevenSegVal)
+static void displayValOn7Seg(uint8_t sevenSegVal, uint32_t isInverted)
 {
     switch(sevenSegVal)
     {
-    case 0: led7seg_setChar('0', 0); break;
-    case 1: led7seg_setChar('1', 0); break;
-    case 2: led7seg_setChar('2', 0); break;
-    case 3: led7seg_setChar('3', 0); break;
-    case 4: led7seg_setChar('4', 0); break;
-    case 5: led7seg_setChar('5', 0); break;
-    case 6: led7seg_setChar('6', 0); break;
-    case 7: led7seg_setChar('7', 0); break;
-    case 8: led7seg_setChar('8', 0); break;
-    case 9: led7seg_setChar('9', 0); break;
-    case 10: led7seg_setChar('A', 0); break;
-    case 11: led7seg_setChar('B', 0); break;
-    case 12: led7seg_setChar('C', 0); break;
-    case 13: led7seg_setChar('D', 0); break;
-    case 14: led7seg_setChar('E', 0); break;
-    case 15: led7seg_setChar('F', 0); break;
+    case 0: led7seg_setChar('0', isInverted); break;
+    case 1: led7seg_setChar('1', isInverted); break;
+    case 2: led7seg_setChar('2', isInverted); break;
+    case 3: led7seg_setChar('3', isInverted); break;
+    case 4: led7seg_setChar('4', isInverted); break;
+    case 5: led7seg_setChar('5', isInverted); break;
+    case 6: led7seg_setChar('6', isInverted); break;
+    case 7: led7seg_setChar('7', isInverted); break;
+    case 8: led7seg_setChar('8', isInverted); break;
+    case 9: led7seg_setChar('9', isInverted); break;
+    case 10: led7seg_setChar('A', isInverted); break;
+    case 11: led7seg_setChar('B', isInverted); break;
+    case 12: led7seg_setChar('C', isInverted); break;
+    case 13: led7seg_setChar('D', isInverted); break;
+    case 14: led7seg_setChar('E', isInverted); break;
+    case 15: led7seg_setChar('F', isInverted); break;
     }
-    //Timer0_Wait(1000);
+}
+
+void setRGB(uint8_t ledMask) {
+	if (ledMask == RGB_RESET) {
+		GPIO_ClearValue(2, (1 << 0));
+		GPIO_ClearValue(0, (1 << 26));
+    }
+	else if (ledMask == RGB_RED_BLUE) {
+		GPIO_SetValue(2, (1 << 0));
+		GPIO_SetValue(0, (1 << 26));
+	}
+	else if (ledMask == RGB_RED) {
+		GPIO_SetValue(2, (1 << 0));
+	}
+	else if (ledMask == RGB_BLUE) {
+		GPIO_SetValue(0, (1 << 26));
+	}
 }
 
 void blink_red_rgb()
 {
 	SysTick_Config(SystemCoreClock/1000);
-	uint32_t redTicks = msTicks;
+	redTicks = msTicks;
     while(1)
     {
-    	rgb_setLeds(1);
+    	setRGB(RGB_RED);
     	if (msTicks - redTicks >= 333)
     	{
-    		rgb_setLeds(0);
+    		setRGB(RGB_RESET);
     		redTicks = msTicks;
     	}
     	if (msTicks - redTicks >= 333) break;
@@ -244,13 +323,13 @@ void blink_red_rgb()
 void blink_blue_rgb()
 {
 	SysTick_Config(SystemCoreClock/1000);
-	uint32_t blueTicks = msTicks;
+	blueTicks = msTicks;
 	while(1)
 	{
-	 	rgb_setLeds(2);
+	 	setRGB(RGB_BLUE);
 	   	if (msTicks - blueTicks >= 333)
 	   	{
-	   		rgb_setLeds(0);
+	   		setRGB(RGB_RESET);
 	   		blueTicks = msTicks;
 	   	}
 	   	if (msTicks - blueTicks >= 333) break;
@@ -260,13 +339,13 @@ void blink_blue_rgb()
 void blink_blue_red_rgb()
 {
 	SysTick_Config(SystemCoreClock/1000);
-	uint32_t blueRedTicks = msTicks;
+	blueRedTicks = msTicks;
 	while(1)
 	{
-	 	rgb_setLeds(3);
+	 	setRGB(RGB_RED_BLUE);
 	   	if (msTicks - blueRedTicks >= 333)
 	   	{
-	   		rgb_setLeds(0);
+	   		setRGB(RGB_RESET);
 	   		blueRedTicks = msTicks;
 	   	}
 	   	if (msTicks - blueRedTicks >= 333) break;
@@ -275,22 +354,31 @@ void blink_blue_red_rgb()
 
 int main (void) {
 
-    uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_blue_flag=0, blink_red_flag=0;
-    int8_t lightSensorVal = 0, tempSensorVal = 0, accelerometerVal = 0;
+    uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_blue_flag=0, blink_red_flag=0, invertedFlag=0;
+    int8_t lightSensorVal = 0, tempSensorVal = 0;
     int8_t acc_x, acc_y, acc_z, x, y, z;
 
-    //init_i2c();
+    init_i2c();
     init_GPIO();
     init_ssp();
+    init_uart();
+
+    pca9532_init();
+    joystick_init();
+    light_enable();
     led7seg_init();
     oled_init();
     acc_init();
+    rgb_init();
+    temp_init(getTicks);
 
     oled_clearScreen(OLED_COLOR_BLACK);
     rgb_setLeds(0);
     SysTick_Config(SystemCoreClock/1000);
 
-    uint32_t sevenSegTime = msTicks, mainTick = msTicks;
+    sevenSegTime = msTicks;
+    mainTick = msTicks;
+
     acc_read(&x, &y, &z);
 
     while (1)
@@ -306,9 +394,12 @@ int main (void) {
     	else if (blink_red_flag) blink_red_rgb();
     	if (flag)
     	{
-    		if(msTicks - sevenSegTime > 1000)
+    		if (/* inverted on a certain side */ 1) //to be done based on accelerometer reading
+    			invertedFlag = 1;
+    		else invertedFlag = 0;
+    		if (msTicks - sevenSegTime > 1000)
     		{
-    		    displayValOn7Seg(sevenSegVal);
+    		    displayValOn7Seg(sevenSegVal, invertedFlag);
         	    sevenSegVal = (sevenSegVal+1)%16;
         	    sevenSegTime = msTicks;
     	    }
@@ -323,7 +414,7 @@ int main (void) {
 
             if (sevenSegVal != 15)
             {
-            	acc_read(&acc_x, &acc_y, &acc_z);
+            	acc_read(&acc_x, &acc_y, &acc_z); //to be deleted as it is done above
             	if (acc_x!=x || acc_y!=y || acc_z!=z)
             	{
             		if (lightSensorVal < LIGHT_LOW_WARNING)
