@@ -12,11 +12,16 @@
 
 #include "led7seg.h"
 #include "oled.h"
-
+#include "temp.h"
+#include "light.h"
 #include "rgb.h"
+#include "acc.h"
 
 #define NOTE_PIN_HIGH() GPIO_SetValue(0, 1<<26);
 #define NOTE_PIN_LOW()  GPIO_ClearValue(0, 1<<26);
+
+#define TEMP_HIGH_WARNING 450
+#define LIGHT_LOW_WARNING 50
 
 uint32_t msTicks = 0;
 
@@ -123,7 +128,7 @@ static uint8_t * song = (uint8_t*)"C1.C1,D2,C2,F2,E4,";
 
 static void init_GPIO(void)
 {
-	// Initialize button SW4 (not really necessary since default configuration)
+	// Initialize button SW4
 	PINSEL_CFG_Type PinCfg;
 	PinCfg.Funcnum = 0;
 	PinCfg.OpenDrain = 0;
@@ -216,36 +221,85 @@ static void displayValOn7Seg(uint8_t sevenSegVal)
     //Timer0_Wait(1000);
 }
 
+void blink_red_rgb()
+{
+	SysTick_Config(SystemCoreClock/1000);
+	uint32_t redTicks = msTicks;
+    while(1)
+    {
+    	rgb_setLeds(1);
+    	if (msTicks - redTicks >= 333)
+    	{
+    		rgb_setLeds(0);
+    		redTicks = msTicks;
+    	}
+    	if (msTicks - redTicks >= 333) break;
+    }
+}
+
+void blink_blue_rgb()
+{
+	SysTick_Config(SystemCoreClock/1000);
+	uint32_t blueTicks = msTicks;
+	while(1)
+	{
+	 	rgb_setLeds(2);
+	   	if (msTicks - blueTicks >= 333)
+	   	{
+	   		rgb_setLeds(0);
+	   		blueTicks = msTicks;
+	   	}
+	   	if (msTicks - blueTicks >= 333) break;
+	}
+}
+
+void blink_blue_red_rgb()
+{
+	SysTick_Config(SystemCoreClock/1000);
+	uint32_t blueRedTicks = msTicks;
+	while(1)
+	{
+	 	rgb_setLeds(3);
+	   	if (msTicks - blueRedTicks >= 333)
+	   	{
+	   		rgb_setLeds(0);
+	   		blueRedTicks = msTicks;
+	   	}
+	   	if (msTicks - blueRedTicks >= 333) break;
+	}
+}
+
 int main (void) {
 
-    uint8_t btn1 = 1, flag = 0, sevenSegVal = 0;
-    uint8_t lightSensorVal = 0, tempSensorVal = 0, accelerometerVal = 0;
+    uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_blue_flag=0, blink_red_flag=0;
+    int8_t lightSensorVal = 0, tempSensorVal = 0, accelerometerVal = 0;
+    int8_t acc_x, acc_y, acc_z, x, y, z;
 
     //init_i2c();
     init_GPIO();
     init_ssp();
     led7seg_init();
     oled_init();
+    acc_init();
 
     oled_clearScreen(OLED_COLOR_BLACK);
+    rgb_setLeds(0);
     SysTick_Config(SystemCoreClock/1000);
 
-    uint32_t sevenSegTime = msTicks;
+    uint32_t sevenSegTime = msTicks, mainTick = msTicks;
+    acc_read(&x, &y, &z);
 
     while (1)
     {
-    	/*
-    	if (btn1 == 0 || flag==1)
-        {
-        	flag = 1;
-            playSong(song);
-            Timer0_Wait(1000);
-        }
-        */
-
     	btn1 = (GPIO_ReadValue(1) >> 31) & 0x01;
 
-    	if (btn1 == 0) flag = !flag;
+    	if (btn1 == 0 && (msTicks - mainTick > 1000)){
+    		flag = !flag;
+    		mainTick = msTicks;
+    	}
+    	if (blink_blue_flag && blink_red_flag) blink_blue_red_rgb();
+    	else if (blink_blue_flag) blink_blue_rgb();
+    	else if (blink_red_flag) blink_red_rgb();
     	if (flag)
     	{
     		if(msTicks - sevenSegTime > 1000)
@@ -256,15 +310,46 @@ int main (void) {
     	    }
             oled_putString(0, 0, (uint8_t *) "Monitor Mode", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
             /* Write code below to read in value of temperature sensor, light sensor and accelerometer and display it on the OLED screen */
+            if (sevenSegVal==5 || sevenSegVal==10 || sevenSegVal==15)
+            {
 
+            }
             /* Write above */
 
-
+            if (sevenSegVal != 15)
+            {
+            	acc_read(&acc_x, &acc_y, &acc_z);
+            	if (acc_x!=x || acc_y!=y || acc_z!=z)
+            	{
+            		if (lightSensorVal < LIGHT_LOW_WARNING)
+            		{
+            			blink_blue_flag = 1;
+            		}
+            		if (tempSensorVal > TEMP_HIGH_WARNING)
+            		{
+            			blink_red_flag = 1;
+            		}
+            		x = acc_x;
+            		y = acc_y;
+            		z = acc_z;
+            	}
+            }
+            else if (sevenSegVal == 15)
+            {
+            	//transmit data to the UART Terminal
+            	//format: NNN_-_T*****_L*****_AX*****_AY*****_AZ*****\r\n
+            	//send message for BLINK_RED if it's happening
+            	//send message for BLINK_BLUE if it's happening
+            }
 
     	}
     	else
     	{
+    		//the 3 sensors should not be reading values here
+    		//UART should not be getting any message
             led7seg_setChar('@', 0);
+            blink_blue_flag = 0;
+            blink_red_flag = 0;
     		oled_putString(0, 0, (uint8_t *) "Stable State", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
     	}
     }
