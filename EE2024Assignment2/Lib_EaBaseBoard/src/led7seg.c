@@ -66,6 +66,16 @@ static uint8_t chars[] = {
 
 };
 
+/* inverted character mapping */
+static uint8_t inverted_chars[] = {
+		/* '-', '.' */
+		0xFB, 0xDF, 0xFF,
+		/* digits 0 - 9 */
+		0x24, 0x7D, 0xE0, 0x70, 0x39, 0x32, 0x23, 0x7C, 0x20, 0x38,
+		/* digits A - F */
+        0x28, 0x23, 0xA6, 0x31, 0xA2, 0xAA
+};
+
 
 /******************************************************************************
  * Local Functions
@@ -102,7 +112,7 @@ void led7seg_init (void)
  *             won't be interpreted as an ascii character.
  *
  *****************************************************************************/
-void led7seg_setChar(uint8_t ch, uint32_t rawMode)
+void led7seg_setChar(uint8_t ch, uint32_t invertedMode)
 {
     uint8_t val = 0xff;
     SSP_DATA_SETUP_Type xferConfig;
@@ -113,8 +123,8 @@ void led7seg_setChar(uint8_t ch, uint32_t rawMode)
         val = chars[ch-'-'];
     }
 
-    if (rawMode) {
-        val = ch;
+    if (invertedMode) {
+        val = inverted_chars[ch - '-'];
     }
 
 	xferConfig.tx_data = &val;
