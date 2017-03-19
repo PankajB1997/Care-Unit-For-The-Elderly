@@ -16,6 +16,10 @@
 #include "light.h"
 #include "rgb.h"
 #include "acc.h"
+#include "uart2.h"
+#include "joystick.h"
+#include "rotary.h"
+#include "pca9532.h"
 
 #define NOTE_PIN_HIGH() GPIO_SetValue(0, 1<<26);
 #define NOTE_PIN_LOW()  GPIO_ClearValue(0, 1<<26);
@@ -309,6 +313,7 @@ int main (void) {
         	    sevenSegTime = msTicks;
     	    }
             oled_putString(0, 0, (uint8_t *) "Monitor Mode", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+            oled_line(10, 0, 10, 10, OLED_COLOR_WHITE); //coordinates may need to be changed
             /* Write code below to read in value of temperature sensor, light sensor and accelerometer and display it on the OLED screen */
             if (sevenSegVal==5 || sevenSegVal==10 || sevenSegVal==15)
             {
