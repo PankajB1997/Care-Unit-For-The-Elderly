@@ -288,19 +288,28 @@ static void displayValOn7Seg(uint8_t sevenSegVal, uint32_t isInverted)
 }
 
 void setRGB(uint8_t ledMask) {
-	if (ledMask == RGB_RESET) {
+	//if (ledMask == RGB_RESET) {
+		//GPIO_ClearValue(2, (1 << 0));
+		//GPIO_ClearValue(0, (1 << 26));
+    //}
+	//else if (ledMask == RGB_RED_BLUE) {
+		//GPIO_SetValue(2, (1 << 0));
+		//GPIO_SetValue(0, (1 << 26));
+	//}
+	//else
+	GPIO_ClearValue(2, (1 << 0));
+	GPIO_ClearValue(0, (1 << 26));
+	if (ledMask == RGB_RED) {
+		GPIO_SetValue(2, (1 << 0));
+	} else {
 		GPIO_ClearValue(2, (1 << 0));
+	}
+	//else
+	if (ledMask == RGB_BLUE) {
+		GPIO_SetValue(0, (1 << 26));
+	}
+	else {
 		GPIO_ClearValue(0, (1 << 26));
-    }
-	else if (ledMask == RGB_RED_BLUE) {
-		GPIO_SetValue(2, (1 << 0));
-		GPIO_SetValue(0, (1 << 26));
-	}
-	else if (ledMask == RGB_RED) {
-		GPIO_SetValue(2, (1 << 0));
-	}
-	else if (ledMask == RGB_BLUE) {
-		GPIO_SetValue(0, (1 << 26));
 	}
 }
 
@@ -352,11 +361,18 @@ void blink_blue_red_rgb()
 	}
 }
 
+//to be done based on accelerometer reading
+int invertedNormally(int8_t x, int8_t y, int8_t z)
+{
+	return 1;
+}
+
 int main (void) {
 
-    uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_blue_flag=0, blink_red_flag=0, invertedFlag=0;
-    int8_t lightSensorVal = 0, tempSensorVal = 0;
-    int8_t acc_x, acc_y, acc_z, x, y, z;
+    uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_blue_flag=0, blink_red_flag=0, invertedFlag=1;
+    uint32_t lightSensorVal = 0;
+    int32_t tempSensorVal = 0;
+    int8_t acc_x, acc_y, acc_z, x=0, y=0, z=0;
 
     init_i2c();
     init_GPIO();
@@ -373,7 +389,7 @@ int main (void) {
     temp_init(getTicks);
 
     oled_clearScreen(OLED_COLOR_BLACK);
-    rgb_setLeds(0);
+    setRGB(0);
     SysTick_Config(SystemCoreClock/1000);
 
     sevenSegTime = msTicks;
@@ -389,12 +405,13 @@ int main (void) {
     		flag = !flag;
     		mainTick = msTicks;
     	}
-    	if (blink_blue_flag && blink_red_flag) blink_blue_red_rgb();
-    	else if (blink_blue_flag) blink_blue_rgb();
-    	else if (blink_red_flag) blink_red_rgb();
+    	//if (blink_blue_flag && blink_red_flag) blink_blue_red_rgb();
+    	//else
+    	if (blink_blue_flag) setRGB(RGB_BLUE);
+    	if (blink_red_flag) setRGB(RGB_RED);
     	if (flag)
     	{
-    		if (/* inverted on a certain side */ 1) //to be done based on accelerometer reading
+    		if (invertedNormally(x,y,z)) //to be done based on accelerometer reading
     			invertedFlag = 1;
     		else invertedFlag = 0;
     		if (msTicks - sevenSegTime > 1000)
@@ -404,14 +421,41 @@ int main (void) {
         	    sevenSegTime = msTicks;
     	    }
             oled_putString(0, 0, (uint8_t *) "Monitor Mode", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-            oled_line(10, 0, 10, 10, OLED_COLOR_WHITE); //coordinates may need to be changed
+           // oled_line(10, 0, 10, 10, OLED_COLOR_WHITE); //coordinates may need to be changed
             /* Write code below to read in value of temperature sensor, light sensor and accelerometer and display it on the OLED screen */
+
             if (sevenSegVal==5 || sevenSegVal==10 || sevenSegVal==15)
             {
+            	//oled_clearScreen(OLED_COLOR_BLACK);
+            	unsigned char TempPrint[40] = "";
+            	unsigned char LightPrint[40] = "";
+                tempSensorVal = temp_read();
+            	sprintf(TempPrint, "T : %5d ", tempSensorVal);
+            	oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,OLED_COLOR_BLACK);
+
+
+            	lightSensorVal = light_read();
+            	sprintf(LightPrint, "L : %5d ", lightSensorVal);
+            	oled_putString(0, 20, (uint8_t *) LightPrint, OLED_COLOR_WHITE,OLED_COLOR_BLACK);
+
+            	acc_read(&acc_x, &acc_y, &acc_z);
+            	acc_x = acc_x + x;
+            	acc_y = acc_y + y;
+            	acc_z = acc_z + z;
+            	char XPrint[20], YPrint[20], ZPrint[20];
+
+            	sprintf(XPrint, "AX : %4d ", acc_x);
+            	sprintf(YPrint, "AY : %4d ", acc_y);
+            	sprintf(ZPrint, "AZ : %4d ", acc_z);
+            	oled_putString(0, 30, (uint8_t *) XPrint, OLED_COLOR_WHITE,
+            			OLED_COLOR_BLACK);
+            	oled_putString(0, 40, (uint8_t *) YPrint, OLED_COLOR_WHITE,
+            			OLED_COLOR_BLACK);
+            	oled_putString(0, 50, (uint8_t *) ZPrint, OLED_COLOR_WHITE,
+            			OLED_COLOR_BLACK);
 
             }
             /* Write above */
-
             if (sevenSegVal != 15)
             {
             	acc_read(&acc_x, &acc_y, &acc_z); //to be deleted as it is done above
@@ -421,9 +465,17 @@ int main (void) {
             		{
             			blink_blue_flag = 1;
             		}
+            		else
+            		{
+            			blink_blue_flag = 0;
+            		}
             		if (tempSensorVal > TEMP_HIGH_WARNING)
             		{
             			blink_red_flag = 1;
+            		}
+            		else
+            		{
+            		    blink_red_flag = 0;
             		}
             		x = acc_x;
             		y = acc_y;
@@ -446,8 +498,10 @@ int main (void) {
             led7seg_setChar('@', 0);
             blink_blue_flag = 0;
             blink_red_flag = 0;
+            setRGB(0);
+            oled_clearScreen(OLED_COLOR_BLACK);
     		oled_putString(0, 0, (uint8_t *) "Stable State", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-    		oled_line(10, 0, 10, 10, OLED_COLOR_WHITE); //coordinates may need to be changed
+    		//oled_line(10, 0, 10, 10, OLED_COLOR_WHITE); //coordinates may need to be changed
     	}
     }
 }
