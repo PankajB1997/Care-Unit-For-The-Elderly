@@ -17,7 +17,6 @@
 #include "light.h"
 #include "rgb.h"
 #include "acc.h"
-#include "uart2.h"
 #include "joystick.h"
 #include "rotary.h"
 #include "pca9532.h"
@@ -33,7 +32,7 @@
 #define RGB_RESET 0x00
 
 uint32_t msTicks = 0;
-uint32_t sevenSegTime, mainTick, blueRedTicks, blueTicks, redTicks, blinkTick;
+uint32_t sevenSegTime, mainTick, blueRedTicks, blueTicks, redTicks, blinkTick, invertedTick;
 
 // Interval in us
 static uint32_t notes[] = {
@@ -155,16 +154,6 @@ static void init_i2c(void)
 		I2C_Cmd(LPC_I2C2, ENABLE);
 }
 
-void pinsel_uart3(void) {
-	PINSEL_CFG_Type PinCfg;
-	PinCfg.Funcnum = 2;
-	PinCfg.Pinnum = 0;
-	PinCfg.Portnum = 0;
-	PINSEL_ConfigPin(&PinCfg);
-	PinCfg.Pinnum = 1;
-	PINSEL_ConfigPin(&PinCfg);
-}
-
 static void init_uart(void)
 {
 	UART_CFG_Type uartCfg;
@@ -173,7 +162,13 @@ static void init_uart(void)
 	uartCfg.Parity = UART_PARITY_NONE;
 	uartCfg.Stopbits = UART_STOPBIT_1;
 	//pin select for uart3
-	pinsel_uart3();
+	PINSEL_CFG_Type PinCfg;
+	PinCfg.Funcnum = 2;
+	PinCfg.Pinnum = 0;
+	PinCfg.Portnum = 0;
+	PINSEL_ConfigPin(&PinCfg);
+	PinCfg.Pinnum = 1;
+	PINSEL_ConfigPin(&PinCfg);
 	//supply power and setup working parts for uart3
 	UART_Init(LPC_UART3, &uartCfg);
 	//enable transmit for uart3
@@ -208,7 +203,7 @@ static void init_GPIO(void)
     /* ---- Speaker ------> */
 //    GPIO_SetDir(2, 1<<0, 1);
 //    GPIO_SetDir(2, 1<<1, 1);
-
+/*
     GPIO_SetDir(0, 1<<27, 1);
     GPIO_SetDir(0, 1<<28, 1);
     GPIO_SetDir(2, 1<<13, 1);
@@ -218,7 +213,7 @@ static void init_GPIO(void)
 
     GPIO_ClearValue(0, 1<<27); //LM4811-clk
     GPIO_ClearValue(0, 1<<28); //LM4811-up/dn
-    GPIO_ClearValue(2, 1<<13); //LM4811-shutdn
+    GPIO_ClearValue(2, 1<<13); //LM4811-shutdn */
     /* <---- Speaker ------ */
 }
 
@@ -304,15 +299,63 @@ void setRGB(uint8_t ledMask) {
 //to be done based on accelerometer reading
 int invertedNormally(int8_t x, int8_t y, int8_t z)
 {
-	return 0;
+	return y>=0;
+}
+
+//send a message to UART
+void uart_sendMessage(char* msg){
+    int len = strlen(msg);
+    msg[len] = '\r';// change \0 to \r
+    msg[++len] = '\n';// append \n behind
+    UART_Send(LPC_UART3, (uint8_t*)msg, (uint32_t)len, BLOCKING);
+}
+
+// EINT3 Interrupt Handler
+void EINT3_IRQHandler(void)
+{
+	// Determine whether GPIO Interrupt P2.10 has occurred - Pushbutton SW3
+	if ((LPC_GPIOINT->IO2IntStatF>>10)& 0x1)
+	{
+        // printf("GPIO Interrupt 2.10\n");
+        // for (i=0;i<9999999;i++);
+        // Clear GPIO Interrupt P2.10
+        LPC_GPIOINT->IO2IntClr = 1<<10;
+	}
+	// Determine whether GPIO Interrupt P2.5 has occurred - Light Sensor and Accelerometer
+	if ((LPC_GPIOINT->IO2IntStatF>>5)& 0x1)
+	{
+		LPC_GPIOINT->IO2IntClr = 1<<5;
+	}
+	// Determine whether GPIO Interrupt P0.6 has occurred - Temp Sensor
+	if ((LPC_GPIOINT->IO0IntStatF>>6)& 0x1)
+	{
+		LPC_GPIOINT->IO0IntClr = 1<<6;
+	}
 }
 
 int main (void) {
 
+	// Setup light limit for triggering interrupt
+//		light_setRange(LIGHT_RANGE_4000);
+//		light_setLoThreshold(LIGHT_LOW_WARNING);
+//		light_setHiThreshold(1500);
+//		light_setIrqInCycles(LIGHT_CYCLE_1);
+//		light_clearIrqStatus();
+
+	// Enable GPIO Interrupt P2.10 - SW3
+	    LPC_GPIOINT->IO2IntEnF |= 1<<10;
+    // Enable GPIO Interrupt P2.5 - Light Sensor
+	    LPC_GPIOINT->IO2IntEnF |= 1<<5;
+	// Enable GPIO Interrupt P0.6 - Temperature Sensor
+	    LPC_GPIOINT->IO0IntEnF |= 1<<6;
+	    // Enable EINT3 interrupt
+	    NVIC_EnableIRQ(EINT3_IRQn);
+
     uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_blue_flag=0, blink_red_flag=0, blink_flag=0, invertedFlag=0, sToMFlag=0;
     uint32_t lightSensorVal = 0;
     int32_t tempSensorVal = 0;
-    int8_t acc_x, acc_y, acc_z, x=0, y=0, z=0;
+    int8_t acc_x, acc_y, acc_z, x=0, y=0, z=0, xoff, yoff, zoff;
+    int uartCounter = 0;
     init_i2c();
     init_GPIO();
     init_ssp();
@@ -334,34 +377,39 @@ int main (void) {
     sevenSegTime = msTicks;
     mainTick = msTicks;
     blinkTick = msTicks;
+    invertedTick = msTicks;
 
     acc_read(&x, &y, &z);
+    xoff = -x;
+    yoff = -y;
+    zoff = -z;
 
     while (1)
     {
 
-    	btn1 = (GPIO_ReadValue(1) >> 31) & 0x01;
+    	btn1 = (GPIO_ReadValue(1) >> 31) & 0x01; //reading from SW4
 
     	if (btn1 == 0 && (msTicks - mainTick > 1000)){
-    		flag = !flag;
     		mainTick = msTicks;
+    		flag = !flag;
     	}
-    	if (blinkTick - msTicks >= 333) {
-    		blink_flag = !blink_flag;
-    		blinkTick = msTicks;
-    	}
-    	if (!blink_flag) setRGB(RGB_RESET);
-    	else {
-    	if (blink_blue_flag && blink_red_flag) setRGB(RGB_RED_BLUE);
-    	else if (blink_blue_flag) setRGB(RGB_BLUE);
-    	else if (blink_red_flag) setRGB(RGB_RED);
-    	else setRGB(RGB_RESET);
-    	}
+
     	if (flag)
     	{
+    		tempSensorVal = temp_read();
+    		lightSensorVal = light_read();
+    		acc_read(&acc_x, &acc_y, &acc_z);
+    		            	acc_x = acc_x + xoff;
+    		            	acc_y = acc_y + yoff;
+    		            	acc_z = acc_z + zoff;
+    		if (invertedNormally(acc_x,acc_y,acc_z)) { //to be done based on accelerometer reading
+    		            	    			invertedFlag = 1;
+    		            	    		}
+    		            	    		else invertedFlag = 0;
+
     		if (sToMFlag) {
     					oled_clearScreen(OLED_COLOR_BLACK);
-    		    		oled_putString(0, 0, (uint8_t *) "Monitor Mode", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+    		    		oled_putString(0, 0, (uint8_t *) "MONITOR", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
     		    		unsigned char TempPrint1[40] = "";
     		    		unsigned char LightPrint1[40] = "";
     		    		strcat(TempPrint1, "T :  0.00 deg C");
@@ -379,43 +427,52 @@ int main (void) {
     		    		            	            			OLED_COLOR_BLACK);
     		    		            	            	oled_putString(0, 50, (uint8_t *) ZPrint1, OLED_COLOR_WHITE,
     		    		            	            			OLED_COLOR_BLACK);
+    		    		//displaying entering monitor mode on uart
+    		    		char uartMessage[255];
+    		    		strcpy(uartMessage, "Entering MONITOR Mode.");
+    		    		uart_sendMessage(uartMessage);
     		    		sevenSegVal = 0;
     		    		sToMFlag = 0;
     		    	}
-    		if (invertedNormally(x,y,z)) //to be done based on accelerometer reading
-    			invertedFlag = 1;
-    		else invertedFlag = 0;
+
+    		if (msTicks - blinkTick > 333) {
+    					blinkTick = msTicks;
+    		    		blink_flag = !blink_flag;
+    		    	}
+    		    	if (blink_flag) setRGB(RGB_RESET);
+    		    	else {
+    		    	if (blink_blue_flag && blink_red_flag) setRGB(RGB_RED_BLUE);
+    		    	else if (blink_blue_flag) setRGB(RGB_BLUE);
+    		    	else if (blink_red_flag) setRGB(RGB_RED);
+    		    	else setRGB(RGB_RESET);
+    		    	}
+
+
     		if (msTicks - sevenSegTime > 1000)
     		{
+    			sevenSegTime = msTicks;
     		    displayValOn7Seg(sevenSegVal, invertedFlag);
         	    sevenSegVal = (sevenSegVal+1)%16;
-        	    sevenSegTime = msTicks;
     	    }
             // oled_line(10, 0, 10, 10, OLED_COLOR_WHITE); //coordinates may need to be changed
-            /* Write code below to read in value of temperature sensor, light sensor and accelerometer and display it on the OLED screen */
 
-            if (sevenSegVal==5 || sevenSegVal==10 || sevenSegVal==15)
+            if (sevenSegVal==6 || sevenSegVal==11 || sevenSegVal==0)
             {
             	//oled_clearScreen(OLED_COLOR_BLACK);
             	//oled_putString(0, 0, (uint8_t *) "Monitor Mode", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
             	unsigned char TempPrint[40] = "";
             	unsigned char LightPrint[40] = "";
-                tempSensorVal = temp_read();
+
             	sprintf(TempPrint, "T : %.2f ", tempSensorVal / 10.0);
             	strcat(TempPrint, "deg C");
             	oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,OLED_COLOR_BLACK);
 
-
-            	lightSensorVal = light_read();
             	sprintf(LightPrint, "L : %5d ", lightSensorVal);
             	strcat(LightPrint, "lux");
             	oled_putString(0, 20, (uint8_t *) LightPrint, OLED_COLOR_WHITE,OLED_COLOR_BLACK);
 
 
-            	acc_read(&acc_x, &acc_y, &acc_z);
-            	//acc_x = acc_x + x;
-            	//acc_y = acc_y + y;
-            	//acc_z = acc_z + z;
+
             	char XPrint[20], YPrint[20], ZPrint[20];
 
             	sprintf(XPrint, "AX : %4d ", acc_x);
@@ -427,12 +484,14 @@ int main (void) {
             	            			OLED_COLOR_BLACK);
             	            	oled_putString(0, 50, (uint8_t *) ZPrint, OLED_COLOR_WHITE,
             	            			OLED_COLOR_BLACK);
+            	            	//x = acc_x;
+            	            	  //          		y = acc_y;
+            	            	    //        		z = acc_z;
 
             }
-            /* Write above */
-            if (sevenSegVal != 15)
+
+            if (sevenSegVal != 15) //probably change 15 to 0
             {
-            	acc_read(&acc_x, &acc_y, &acc_z); //to be deleted as it is done above
             	if (acc_x!=x || acc_y!=y || acc_z!=z)
             	{
             		if (lightSensorVal < LIGHT_LOW_WARNING)
@@ -456,12 +515,24 @@ int main (void) {
             		z = acc_z;
             	}
             }
-            else if (sevenSegVal == 15)
+            else if (sevenSegVal == 15) //probably change 15 to 0
             {
+            	if (blink_red_flag) {
+		    		char uartMessage[255];
+            		strcpy(uartMessage, "Fire was Detected.");
+            		uart_sendMessage(uartMessage);
+            	}
+            	if (blink_blue_flag) {
+		    		char uartMessage[255];
+            		strcpy(uartMessage, "Movement in darkness was Detected.");
+            		uart_sendMessage(uartMessage);
+            	}
             	//transmit data to the UART Terminal
-            	//format: NNN_-_T*****_L*****_AX*****_AY*****_AZ*****\r\n
-            	//send message for BLINK_RED if it's happening
-            	//send message for BLINK_BLUE if it's happening
+            	//format: NNN_-_T*****_L*****_AX*****_AY*****_AZ*****
+	    		char uartMessage[255];
+            	sprintf(uartMessage, "%3d_-_T%.2f_L%4d_AX%d_AY%d_AZ%d", uartCounter, tempSensorVal, lightSensorVal, acc_x, acc_y, acc_z);
+            	uart_sendMessage(uartMessage);
+            	uartCounter++;
             }
 
     	}
@@ -475,7 +546,7 @@ int main (void) {
             blink_red_flag = 0;
             setRGB(RGB_RESET);
             //oled_clearScreen(OLED_COLOR_BLACK);
-    		oled_putString(0, 0, (uint8_t *) "Stable State", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+    		oled_putString(0, 0, (uint8_t *) "STABLE   ", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
     		oled_putString(0, 10, (uint8_t *) "               ", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
     		oled_putString(0, 20, (uint8_t *) "               ", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
     		oled_putString(0, 30, (uint8_t *) "               ", OLED_COLOR_WHITE, OLED_COLOR_BLACK);
