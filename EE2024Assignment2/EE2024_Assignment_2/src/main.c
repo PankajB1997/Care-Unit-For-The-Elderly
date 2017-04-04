@@ -574,7 +574,7 @@ int main(void) {
 				uartCounter++;
 			}
 
-		} else if (msTicks > 3000) {
+		} else {
 			//the 3 sensors should not be reading values here
 			//UART should not be getting any message
 			sToMFlag = 1;
