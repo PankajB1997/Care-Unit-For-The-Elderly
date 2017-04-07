@@ -24,7 +24,7 @@
 #define NOTE_PIN_HIGH() GPIO_SetValue(0, 1<<26);
 #define NOTE_PIN_LOW()  GPIO_ClearValue(0, 1<<26);
 
-#define TEMP_HIGH_WARNING 45
+#define TEMP_HIGH_WARNING 2500
 #define LIGHT_LOW_WARNING 50
 #define TEMP_HALF_PERIODS 170
 #define RGB_RED 0x01
@@ -34,13 +34,12 @@
 
 uint32_t msTicks = 0;
 uint32_t sevenSegTime, sevenSegIntroTime, mainTick, blueRedTicks, blueTicks,
-		accTicks, redTicks, blinkTick, invertedTick, introTime, ledTick,
+		accTicks, redTicks, blinkTick, invertedTick, introTime, ledTick, tTicks,
 		tempLightTick, tempStartTime = 0, tempEndTime = 0, tempIntCount = 0;
 uint8_t blink_blue_flag = 0, blink_red_flag = 0, noMovementFlag = 0,
-		lightIntFlag = 0;
+		lightIntFlag = 0, tempIntFlag = 0;
 int8_t acc_x = 0, acc_y = 0, acc_z = 0, x = 0, y = 0, z = 0, xoff, yoff, zoff,
 		led_y;
-float tempSensorVal = 0;
 
 static uint8_t barPos = 2;
 
@@ -248,7 +247,9 @@ int movementDetected() {
 	diffx = (acc_x > x) ? acc_x - x : x - acc_x;
 	diffy = (acc_y > y) ? acc_y - y : y - acc_y;
 	diffz = (acc_z > z) ? acc_z - z : z - acc_z;
-	return ((diffx >= 5) || (diffy >= 5) || (diffz >= 5));
+	if ((diffx >= 5) || (diffy >= 5) || (diffz >= 5))
+		return 1;
+	else return 0;
 }
 
 // EINT3 Interrupt Handler
@@ -275,23 +276,18 @@ void EINT3_IRQHandler(void) {
 
 	// Separate interrupt needed for accelerometer ?????
 
-	// Determine whether GPIO Interrupt P0.6 has occurred - Temperature Sensor
-	if ((LPC_GPIOINT ->IO0IntStatF >> 6) & 0x1) {
-		LPC_GPIOINT ->IO0IntClr = 1 << 6;
-		tempIntCount++;
-		if (tempIntCount == 1)
+	// Determine whether GPIO Interrupt P0.2 has occurred - Temperature Sensor
+	if ((LPC_GPIOINT ->IO0IntStatF >> 2) & 0x1) {
+		if (tempStartTime==0 && tempEndTime==0)
 			tempStartTime = msTicks;
-		else if (tempIntCount == TEMP_HALF_PERIODS+1) {
-			tempEndTime = msTicks;
-			tempSensorVal = ((2*1000*(tempEndTime - tempStartTime)) / (TEMP_HALF_PERIODS*10)) - 273;
-			if (tempSensorVal >= TEMP_HIGH_WARNING) {
-				//if (movementDetected())
-				blink_red_flag = 1;
-				//else
-				//noMovementFlag = 1;
+		else if (tempStartTime!=0 && tempEndTime==0) {
+			tempIntCount++;
+			if (tempIntCount == TEMP_HALF_PERIODS) {
+				tempEndTime = msTicks;
+				tempIntFlag = 1;
 			}
-			tempIntCount = 0;
 		}
+		LPC_GPIOINT ->IO0IntClr = 1 << 2;
 	}
 	//}
 }
@@ -307,7 +303,7 @@ int main(void) {
 
 	uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_flag = 0, invertedFlag =
 			0, sToMFlag = 0, mToSFlag = 1, displayFlag = 0, uartFlag = 0, rgbFlag = 0;
-	uint32_t lightSensorVal = 0;
+	uint32_t lightSensorVal = 0, tempSensorVal = 0;
 	int8_t firstTime = 1, val = 57, dir;
 	int uartCounter = 0;
 	init_i2c();
@@ -334,8 +330,8 @@ int main(void) {
 	LPC_GPIOINT ->IO2IntEnF |= 1 << 10;
 	// Enable GPIO Interrupt P2.5 - Light Sensor
 	LPC_GPIOINT ->IO2IntEnF |= 1 << 5;
-	// Enable GPIO Interrupt P0.6 - Temperature Sensor
-	LPC_GPIOINT ->IO0IntEnF |= 1 << 6;
+	// Enable GPIO Interrupt P0.2 - Temperature Sensor
+	LPC_GPIOINT ->IO0IntEnF |= 1 << 2;
 	// Enable EINT3 interrupt
 	NVIC_EnableIRQ(EINT3_IRQn);
 	NVIC_SetPriority(EINT3_IRQn, 31);
@@ -360,6 +356,7 @@ int main(void) {
 	ledTick = msTicks;
 	tempLightTick = msTicks;
 	accTicks = msTicks;
+	tTicks = msTicks;
 
 	// assume the board is in zero-g position when reading first value
 	acc_read(&acc_x, &acc_y, &acc_z);
@@ -408,10 +405,10 @@ int main(void) {
 			flag = !flag;
 		}
 
-		if (flag) {
+		if (flag==1) {
 //			if (msTicks - tempLightTick >= 500) {
 //				tempSensorVal = temp_read();
-			if (sToMFlag) {
+			if (sToMFlag==1) {
 				oled_clearScreen(OLED_COLOR_BLACK);
 				oled_putString(0, 0, (uint8_t *) "MONITOR", OLED_COLOR_WHITE,
 						OLED_COLOR_BLACK);
@@ -456,47 +453,61 @@ int main(void) {
 				acc_x = acc_x + xoff;
 				acc_y = acc_y + yoff;
 				acc_z = acc_z + zoff;
+				led_y = acc_y;
+				if (led_y < 0) {
+					dir = 1;
+					led_y = -led_y;
+				} else {
+					dir = -1;
+				}
+				if (led_y > 1 && (msTicks - ledTick) >= (40 / (1 + (led_y / 10)))) {
+								moveBar(1, dir);
+								ledTick = msTicks;
+							}
 			}
-			led_y = acc_y;
-			if (led_y < 0) {
-				dir = 1;
-				led_y = -led_y;
-			} else {
-				dir = -1;
-			}
-
-			if (led_y > 1
-					&& (msTicks - ledTick) >= (160 / (1 + (led_y / 10)))) {
-//				moveBar(1, dir);
-				ledTick = msTicks;
-			}
-			if (invertedNormally(acc_x, acc_y, acc_z)) { //to be done based on accelerometer reading
+			if (invertedNormally(acc_x, acc_y, acc_z)==1) { //to be done based on accelerometer reading
 				invertedFlag = 1;
-			} else
+			} else {
 				invertedFlag = 0;
-
+			}
 			if (msTicks - blinkTick >= 333) {
 				blinkTick = msTicks;
 				blink_flag = !blink_flag;
 			}
-			if (lightIntFlag) {
+			if (lightIntFlag==1) {
 				lightIntFlag = 0;
-				if (movementDetected()) {
+				if ((msTicks-tTicks >= 400) && (blink_blue_flag==0) && (movementDetected()==1)) {
 					blink_blue_flag = 1;
 				}
 
 			}
+			if (tempIntFlag==1) {
+				tempIntFlag = 0;
+				//if (tempEndTime > tempStartTime)
+				tempEndTime = tempEndTime - tempStartTime;
+				//else tempEndTime = 0xFFFFFFFF - tempStartTime + 1 + tempEndTime;
+				//tempSensorVal = ((tempEndTime) / (TEMP_HALF_PERIODS*10)) - 273;
+				//tempSensorVal = tempEndTime;
+				tempSensorVal = ((2*1000*tempEndTime) / TEMP_HALF_PERIODS) - 2731;
+				//tempSensorVal /= 100;
+				tempIntCount = 0;
+				tempStartTime = 0;
+				tempEndTime = 0;
+				if ((msTicks-tTicks >= 400) && (blink_red_flag==0) && (movementDetected()==1) && (tempSensorVal >= TEMP_HIGH_WARNING)) {
+					blink_red_flag = 1;
+				}
+			}
 			//if (rgbFlag || movementDetected()) {
-			if (blink_flag)
+			if (blink_flag==1)
 				setRGB(RGB_RESET);
 			else {
-				if (blink_blue_flag && blink_red_flag) {
+				if ((blink_blue_flag==1) && (blink_red_flag==1)) {
 					setRGB(RGB_RED_BLUE);
 					rgbFlag = 1;
-				} else if (blink_blue_flag) {
+				} else if (blink_blue_flag==1) {
 					setRGB(RGB_BLUE);
 					rgbFlag = 1;
-				} else if (blink_red_flag) {
+				} else if (blink_red_flag==1) {
 					setRGB(RGB_RED);
 					rgbFlag = 1;
 				} else
@@ -512,14 +523,14 @@ int main(void) {
 
 			if (sevenSegVal == 8 || sevenSegVal == 13 || sevenSegVal == 2)
 				displayFlag = 1;
-			if (displayFlag
+			if (displayFlag==1
 					&& (sevenSegVal == 6 || sevenSegVal == 11
 							|| sevenSegVal == 0)) {
 				displayFlag = 0;
 				unsigned char TempPrint[40] = "";
 				unsigned char LightPrint[40] = "";
 
-				sprintf(TempPrint, "T : %.2f ", tempSensorVal);
+				sprintf(TempPrint, "T : %.2f ", tempSensorVal/100.0);
 				strcat(TempPrint, "deg C");
 				oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,
 						OLED_COLOR_BLACK);
@@ -548,26 +559,25 @@ int main(void) {
 			}
 			if (sevenSegVal == 14)
 				uartFlag = 1;
-			if (uartFlag && sevenSegVal == 0) {
+			if (uartFlag==1 && sevenSegVal == 0) {
 				uartFlag = 0;
 				char uartMessage[255] = "";
-				if (blink_red_flag) {
+				if (blink_red_flag==1) {
 					strcat(&uartMessage,
 							"Fire was Detected.                                         \r\n");
 				}
-				if (blink_blue_flag) {
+				if (blink_blue_flag==1) {
 					strcat(&uartMessage,
 							"Movement in darkness was Detected.                                   \r\n");
 				}
 				char values[255] = "";
 				sprintf(&values,
 						"%03d_-_T%.2f_L%d_AX%d_AY%d_AZ%d                             ",
-						uartCounter, tempSensorVal, lightSensorVal, acc_x,
+						uartCounter, tempSensorVal/100.0, lightSensorVal, acc_x,
 						acc_y, acc_z);
 				strcat(&uartMessage, &values);
 				uart_sendMessage(uartMessage);
-				if (UART_CheckBusy(LPC_UART3 ))
-					uartCounter++;
+				uartCounter++;
 			}
 
 		} else {
@@ -586,6 +596,8 @@ int main(void) {
 			//oled_putString(0, 0, (uint8_t *) "STABLE            ",
 			//	OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 			noMovementFlag = 1;
+			tTicks = msTicks;
+			pca9532_setLeds(0, 0);
 		}
 	}
 
