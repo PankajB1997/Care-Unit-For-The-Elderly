@@ -24,34 +24,40 @@
 #define NOTE_PIN_HIGH() GPIO_SetValue(0, 1<<26);
 #define NOTE_PIN_LOW()  GPIO_ClearValue(0, 1<<26);
 
-#define TEMP_HIGH_WARNING 450
+#define TEMP_HIGH_WARNING 45
 #define LIGHT_LOW_WARNING 50
+#define TEMP_HALF_PERIODS 170
 #define RGB_RED 0x01
 #define RGB_BLUE 0x02
 #define RGB_RED_BLUE 0x03
 #define RGB_RESET 0x00
 
 uint32_t msTicks = 0;
-uint32_t sevenSegTime, sevenSegIntroTime, mainTick, blueRedTicks, blueTicks, redTicks, blinkTick,
-		invertedTick, introTime;
+uint32_t sevenSegTime, sevenSegIntroTime, mainTick, blueRedTicks, blueTicks,
+		accTicks, redTicks, blinkTick, invertedTick, introTime, ledTick,
+		tempLightTick, tempStartTime = 0, tempEndTime = 0, tempIntCount = 0;
+uint8_t blink_blue_flag = 0, blink_red_flag = 0, noMovementFlag = 0,
+		lightIntFlag = 0;
+int8_t acc_x = 0, acc_y = 0, acc_z = 0, x = 0, y = 0, z = 0, xoff, yoff, zoff,
+		led_y;
+float tempSensorVal = 0;
 
 static uint8_t barPos = 2;
 
-static void moveBar(uint8_t steps, uint8_t dir)
-{
-    uint16_t ledOn = 0;
+static void moveBar(uint8_t steps, uint8_t dir) {
+	uint16_t ledOn = 0;
 
-    if (barPos == 0)
-        ledOn = (1 << 0) | (3 << 14);
-    else if (barPos == 1)
-        ledOn = (3 << 0) | (1 << 15);
-    else
-        ledOn = 0x07 << (barPos-2);
+	if (barPos == 0)
+		ledOn = (1 << 0) | (3 << 14);
+	else if (barPos == 1)
+		ledOn = (3 << 0) | (1 << 15);
+	else
+		ledOn = 0x07 << (barPos - 2);
 
-    barPos += (dir*steps);
-    barPos = (barPos % 16);
+	barPos += (dir * steps);
+	barPos = (barPos % 16);
 
-    pca9532_setLeds(ledOn, 0xffff);
+	pca9532_setLeds(ledOn, 0xffff);
 }
 
 static void init_i2c(void) {
@@ -115,20 +121,6 @@ static void init_GPIO(void) {
 	PinCfg.Pinnum = 10;
 	PINSEL_ConfigPin(&PinCfg);
 	GPIO_SetDir(2, 1 << 10, 0);
-
-	/* ---- Speaker ------> */
-//    GPIO_SetDir(2, 1<<0, 1);
-//    GPIO_SetDir(2, 1<<1, 1);
-	/*
-	 GPIO_SetDir(0, 1<<27, 1);
-	 GPIO_SetDir(0, 1<<28, 1);
-	 GPIO_SetDir(2, 1<<13, 1);
-	 // Main tone signal : P0.26
-	 GPIO_SetDir(0, 1<<26, 1);
-	 GPIO_ClearValue(0, 1<<27); //LM4811-clk
-	 GPIO_ClearValue(0, 1<<28); //LM4811-up/dn
-	 GPIO_ClearValue(2, 1<<13); //LM4811-shutdn */
-	/* <---- Speaker ------ */
 }
 
 static void init_ssp(void) {
@@ -164,7 +156,6 @@ static void init_ssp(void) {
 
 	// Enable SSP peripheral
 	SSP_Cmd(LPC_SSP1, ENABLE);
-
 }
 
 void SysTick_Handler(void) {
@@ -240,7 +231,7 @@ void setRGB(uint8_t ledMask) {
 
 //to be done based on accelerometer reading
 int invertedNormally(int8_t x, int8_t y, int8_t z) {
-	return y >= -2;
+	return y >= -3;
 }
 
 //send a message to UART
@@ -252,23 +243,57 @@ void uart_sendMessage(char* msg) {
 	UART_Send(LPC_UART3, (uint8_t*) msg, (uint32_t) len, BLOCKING);
 }
 
+int movementDetected() {
+	int diffx, diffy, diffz;
+	diffx = (acc_x > x) ? acc_x - x : x - acc_x;
+	diffy = (acc_y > y) ? acc_y - y : y - acc_y;
+	diffz = (acc_z > z) ? acc_z - z : z - acc_z;
+	return ((diffx >= 5) || (diffy >= 5) || (diffz >= 5));
+}
+
 // EINT3 Interrupt Handler
 void EINT3_IRQHandler(void) {
 	// Determine whether GPIO Interrupt P2.10 has occurred - Pushbutton SW3
 	if ((LPC_GPIOINT ->IO2IntStatF >> 10) & 0x1) {
-		// printf("GPIO Interrupt 2.10\n");
-		// for (i=0;i<9999999;i++);
 		// Clear GPIO Interrupt P2.10
 		LPC_GPIOINT ->IO2IntClr = 1 << 10;
 	}
+
+	//acc_read(&acc_x, &acc_y, &acc_z);
+	//acc_x = acc_x + xoff;
+	//acc_y = acc_y + yoff;
+	//acc_z = acc_z + zoff;
+	//if (movementDetected()) {
 	// Determine whether GPIO Interrupt P2.5 has occurred - Light Sensor and Accelerometer
 	if ((LPC_GPIOINT ->IO2IntStatF >> 5) & 0x1) {
 		LPC_GPIOINT ->IO2IntClr = 1 << 5;
+		light_clearIrqStatus();
+		lightIntFlag = 1;
+		//if (movementDetected()) blink_blue_flag = 1;
+		//else noMovementFlag = 1;
 	}
-	// Determine whether GPIO Interrupt P0.6 has occurred - Temp Sensor
+
+	// Separate interrupt needed for accelerometer ?????
+
+	// Determine whether GPIO Interrupt P0.6 has occurred - Temperature Sensor
 	if ((LPC_GPIOINT ->IO0IntStatF >> 6) & 0x1) {
 		LPC_GPIOINT ->IO0IntClr = 1 << 6;
+		tempIntCount++;
+		if (tempIntCount == 1)
+			tempStartTime = msTicks;
+		else if (tempIntCount == TEMP_HALF_PERIODS+1) {
+			tempEndTime = msTicks;
+			tempSensorVal = ((2*1000*(tempEndTime - tempStartTime)) / (TEMP_HALF_PERIODS*10)) - 273;
+			if (tempSensorVal >= TEMP_HIGH_WARNING) {
+				//if (movementDetected())
+				blink_red_flag = 1;
+				//else
+				//noMovementFlag = 1;
+			}
+			tempIntCount = 0;
+		}
 	}
+	//}
 }
 
 // UART3 Interrupt Handler
@@ -278,12 +303,12 @@ void UART3_IRQHandler(void) {
 
 int main(void) {
 
-	uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_blue_flag = 0,
-			blink_red_flag = 0, blink_flag = 0, invertedFlag = 0, sToMFlag = 0, mToSFlag = 1,
-			displayFlag = 0, uartFlag = 0;
+	NVIC_SetPriority(SysTick_IRQn, 0);
+
+	uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_flag = 0, invertedFlag =
+			0, sToMFlag = 0, mToSFlag = 1, displayFlag = 0, uartFlag = 0, rgbFlag = 0;
 	uint32_t lightSensorVal = 0;
-	int32_t tempSensorVal = 0;
-	int8_t acc_x, acc_y, acc_z, x = 0, y = 0, z = 0, xoff, yoff, zoff, led_y, dir, wait=0;
+	int8_t firstTime = 1, val = 57, dir;
 	int uartCounter = 0;
 	init_i2c();
 	init_GPIO();
@@ -302,7 +327,6 @@ int main(void) {
 	// Setup light limit for triggering interrupt
 	light_setRange(LIGHT_RANGE_4000);
 	light_setLoThreshold(LIGHT_LOW_WARNING);
-	light_setHiThreshold(1500);
 	light_setIrqInCycles(LIGHT_CYCLE_1);
 	light_clearIrqStatus();
 
@@ -314,11 +338,13 @@ int main(void) {
 	LPC_GPIOINT ->IO0IntEnF |= 1 << 6;
 	// Enable EINT3 interrupt
 	NVIC_EnableIRQ(EINT3_IRQn);
+	NVIC_SetPriority(EINT3_IRQn, 31);
 
 	// Enable UART Rx Interrupt
 	UART_IntConfig(LPC_UART3, UART_INTCFG_RBR, ENABLE);
 	// Enable Interrupt for UART3
 	NVIC_EnableIRQ(UART3_IRQn);
+	NVIC_SetPriority(UART3_IRQn, 1);
 
 	oled_clearScreen(OLED_COLOR_BLACK);
 	led7seg_setChar('@', 0);
@@ -331,25 +357,29 @@ int main(void) {
 	blinkTick = msTicks;
 	invertedTick = msTicks;
 	introTime = msTicks;
+	ledTick = msTicks;
+	tempLightTick = msTicks;
+	accTicks = msTicks;
 
 	// assume the board is in zero-g position when reading first value
-	acc_read(&x, &y, &z);
+	acc_read(&acc_x, &acc_y, &acc_z);
+	x = acc_x;
+	y = acc_y;
+	z = acc_z;
 	xoff = -x;
 	yoff = -y;
-	zoff = 64-z;
-
-	int val = 57, firstTime=1;
+	zoff = 64 - z;
 
 	while (1) {
 
 		if (msTicks - introTime <= 11000) {
-			oled_putString(0, 0, (uint8_t *) "C.U.T.E",
-					OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+			oled_putString(0, 0, (uint8_t *) "C.U.T.E", OLED_COLOR_WHITE,
+					OLED_COLOR_BLACK);
 			oled_line(0, 10, 42, 10, OLED_COLOR_WHITE);
 			oled_putString(0, 20, (uint8_t *) "BY", OLED_COLOR_WHITE,
 					OLED_COLOR_BLACK);
-			oled_putString(0, 40, (uint8_t *) "1. Pankaj B.",
-					OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+			oled_putString(0, 40, (uint8_t *) "1. Pankaj B.", OLED_COLOR_WHITE,
+					OLED_COLOR_BLACK);
 			oled_putString(0, 50, (uint8_t *) "2. Zhao Hongwei",
 					OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 			if (firstTime) {
@@ -363,39 +393,24 @@ int main(void) {
 			continue;
 		}
 
+//		if (noMovementFlag) {
+//			light_setRange(LIGHT_RANGE_4000);
+//			light_setLoThreshold(LIGHT_LOW_WARNING);
+//			light_setIrqInCycles(LIGHT_CYCLE_1);
+//			light_clearIrqStatus();
+//			noMovementFlag = 0;
+//		}
+
 		btn1 = (GPIO_ReadValue(1) >> 31) & 0x01; //reading from SW4
 
-		if (btn1 == 0 && (msTicks - mainTick > 1000)) {
+		if (btn1 == 0 && (msTicks - mainTick >= 1000)) {
 			mainTick = msTicks;
 			flag = !flag;
 		}
 
 		if (flag) {
-			mToSFlag = 1;
-			tempSensorVal = temp_read();
-			lightSensorVal = light_read();
-			acc_read(&acc_x, &acc_y, &acc_z);
-			acc_x = acc_x + xoff;
-			acc_y = acc_y + yoff;
-			acc_z = acc_z + zoff;
-			led_y = acc_y;
-			if (led_y < 0) {
-			            dir = 1;
-			            led_y = -led_y;
-			        }
-			        else {
-			            dir = -1;
-			        }
-
-			        if (led_y > 1 && wait++ > (40 / (1 + (led_y/10)))) {
-			            moveBar(1, dir);
-			            wait = 0;
-			        }
-			if (invertedNormally(acc_x, acc_y, acc_z)) { //to be done based on accelerometer reading
-				invertedFlag = 1;
-			} else
-				invertedFlag = 0;
-
+//			if (msTicks - tempLightTick >= 500) {
+//				tempSensorVal = temp_read();
 			if (sToMFlag) {
 				oled_clearScreen(OLED_COLOR_BLACK);
 				oled_putString(0, 0, (uint8_t *) "MONITOR", OLED_COLOR_WHITE,
@@ -419,33 +434,77 @@ int main(void) {
 						OLED_COLOR_BLACK);
 				oled_putString(0, 50, (uint8_t *) ZPrint1, OLED_COLOR_WHITE,
 						OLED_COLOR_BLACK);
-				//displaying entering monitor mode on uart
+				//displaying entering monitor mode on UART
 				char uartMessage[255];
 				strcpy(uartMessage,
 						"Entering MONITOR Mode.                            ");
 				uart_sendMessage(uartMessage);
 				sevenSegVal = 0;
 				sToMFlag = 0;
+				lightIntFlag = 0;
+			}
+//			lightSensorVal = light_read();
+//				tempLightTick = msTicks;
+//			}
+			mToSFlag = 1;
+			if (msTicks - accTicks >= 200) {
+				accTicks = msTicks;
+				x = acc_x;
+				y = acc_y;
+				z = acc_z;
+				acc_read(&acc_x, &acc_y, &acc_z);
+				acc_x = acc_x + xoff;
+				acc_y = acc_y + yoff;
+				acc_z = acc_z + zoff;
+			}
+			led_y = acc_y;
+			if (led_y < 0) {
+				dir = 1;
+				led_y = -led_y;
+			} else {
+				dir = -1;
 			}
 
-			if (msTicks - blinkTick > 333) {
+			if (led_y > 1
+					&& (msTicks - ledTick) >= (160 / (1 + (led_y / 10)))) {
+//				moveBar(1, dir);
+				ledTick = msTicks;
+			}
+			if (invertedNormally(acc_x, acc_y, acc_z)) { //to be done based on accelerometer reading
+				invertedFlag = 1;
+			} else
+				invertedFlag = 0;
+
+			if (msTicks - blinkTick >= 333) {
 				blinkTick = msTicks;
 				blink_flag = !blink_flag;
 			}
+			if (lightIntFlag) {
+				lightIntFlag = 0;
+				if (movementDetected()) {
+					blink_blue_flag = 1;
+				}
+
+			}
+			//if (rgbFlag || movementDetected()) {
 			if (blink_flag)
 				setRGB(RGB_RESET);
 			else {
-				if (blink_blue_flag && blink_red_flag)
+				if (blink_blue_flag && blink_red_flag) {
 					setRGB(RGB_RED_BLUE);
-				else if (blink_blue_flag)
+					rgbFlag = 1;
+				} else if (blink_blue_flag) {
 					setRGB(RGB_BLUE);
-				else if (blink_red_flag)
+					rgbFlag = 1;
+				} else if (blink_red_flag) {
 					setRGB(RGB_RED);
-				else
+					rgbFlag = 1;
+				} else
 					setRGB(RGB_RESET);
 			}
+			//}
 
-			if (msTicks - sevenSegTime > 1000) {
+			if (msTicks - sevenSegTime >= 1000) {
 				sevenSegTime = msTicks;
 				displayValOn7Seg(sevenSegVal, invertedFlag);
 				sevenSegVal = (sevenSegVal + 1) % 16;
@@ -460,11 +519,12 @@ int main(void) {
 				unsigned char TempPrint[40] = "";
 				unsigned char LightPrint[40] = "";
 
-				sprintf(TempPrint, "T : %.2f ", tempSensorVal / 10.0);
+				sprintf(TempPrint, "T : %.2f ", tempSensorVal);
 				strcat(TempPrint, "deg C");
 				oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,
 						OLED_COLOR_BLACK);
 
+				lightSensorVal = light_read();
 				sprintf(LightPrint, "L : %5d ", lightSensorVal);
 				strcat(LightPrint, "lux");
 				oled_putString(0, 20, (uint8_t *) LightPrint, OLED_COLOR_WHITE,
@@ -481,30 +541,14 @@ int main(void) {
 						OLED_COLOR_BLACK);
 				oled_putString(0, 50, (uint8_t *) ZPrint, OLED_COLOR_WHITE,
 						OLED_COLOR_BLACK);
-					}
+			}
 
-			if (sevenSegVal != 0)
-					{
-				if (acc_x != x || acc_y != led_y || acc_z != z) {
-					if (lightSensorVal < LIGHT_LOW_WARNING) {
-						blink_blue_flag = 1;
-					} else {
-						blink_blue_flag = 0;
-					}
-					if (tempSensorVal > TEMP_HIGH_WARNING) {
-						blink_red_flag = 1;
-					} else {
-						blink_red_flag = 0;
-					}
-					x = acc_x;
-					y = acc_y;
-					z = acc_z;
-				}
+			if (sevenSegVal != 0) {
+
 			}
 			if (sevenSegVal == 14)
 				uartFlag = 1;
-			if (uartFlag && sevenSegVal == 0)
-					{
+			if (uartFlag && sevenSegVal == 0) {
 				uartFlag = 0;
 				char uartMessage[255] = "";
 				if (blink_red_flag) {
@@ -518,27 +562,30 @@ int main(void) {
 				char values[255] = "";
 				sprintf(&values,
 						"%03d_-_T%.2f_L%d_AX%d_AY%d_AZ%d                             ",
-						uartCounter, tempSensorVal / 10.0, lightSensorVal,
-						acc_x, acc_y, acc_z);
+						uartCounter, tempSensorVal, lightSensorVal, acc_x,
+						acc_y, acc_z);
 				strcat(&uartMessage, &values);
 				uart_sendMessage(uartMessage);
-				if (UART_CheckBusy(LPC_UART3)) uartCounter++;
+				if (UART_CheckBusy(LPC_UART3 ))
+					uartCounter++;
 			}
 
 		} else {
 			//the 3 sensors should not be reading values here
 			//UART should not be getting any message
 			sToMFlag = 1;
-			if (mToSFlag) {
-				oled_clearScreen(OLED_COLOR_BLACK);
-				mToSFlag = 0;
-			}
+//			if (mToSFlag) {
+			oled_clearScreen(OLED_COLOR_BLACK);
+//				mToSFlag = 0;
+//			}
 			led7seg_setChar('@', 0); // turn off the display
 			blink_blue_flag = 0;
 			blink_red_flag = 0;
+			rgbFlag = 0;
 			setRGB(RGB_RESET);
-			oled_putString(0, 0, (uint8_t *) "STABLE            ",
-					OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+			//oled_putString(0, 0, (uint8_t *) "STABLE            ",
+			//	OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+			noMovementFlag = 1;
 		}
 	}
 
