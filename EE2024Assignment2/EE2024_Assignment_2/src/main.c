@@ -31,6 +31,9 @@
 #define RGB_BLUE 0x02
 #define RGB_RED_BLUE 0x03
 #define RGB_RESET 0x00
+#define ROTARY_RIGHT 0x01
+#define ROTARY_LEFT 0x02
+#define NUM_RECORDS 25
 
 uint32_t msTicks = 0;
 uint32_t sevenSegTime, sevenSegIntroTime, mainTick, blueRedTicks, blueTicks,
@@ -41,23 +44,16 @@ uint8_t blink_blue_flag = 0, blink_red_flag = 0, noMovementFlag = 0,
 int8_t acc_x = 0, acc_y = 0, acc_z = 0, x = 0, y = 0, z = 0, xoff, yoff, zoff,
 		led_y;
 
-static uint8_t barPos = 2;
+typedef struct {
+	int lightVal;
+	float tempVal;
+	int acc_x;
+	int acc_y;
+	int acc_z;
+	int sevenSegVal;
+} Record;
 
-static void moveBar(uint8_t steps, uint8_t dir) {
-	uint16_t ledOn = 0;
-
-	if (barPos == 0)
-		ledOn = (1 << 0) | (3 << 14);
-	else if (barPos == 1)
-		ledOn = (3 << 0) | (1 << 15);
-	else
-		ledOn = 0x07 << (barPos - 2);
-
-	barPos += (dir * steps);
-	barPos = (barPos % 16);
-
-	pca9532_setLeds(ledOn, 0xffff);
-}
+Record records[NUM_RECORDS];
 
 static void init_i2c(void) {
 	PINSEL_CFG_Type PinCfg;
@@ -249,7 +245,8 @@ int movementDetected() {
 	diffz = (acc_z > z) ? acc_z - z : z - acc_z;
 	if ((diffx >= 5) || (diffy >= 5) || (diffz >= 5))
 		return 1;
-	else return 0;
+	else
+		return 0;
 }
 
 // EINT3 Interrupt Handler
@@ -279,9 +276,9 @@ void EINT3_IRQHandler(void) {
 
 	// Determine whether GPIO Interrupt P0.2 has occurred - Temperature Sensor
 	if ((LPC_GPIOINT ->IO0IntStatF >> 2) & 0x1) {
-		if (tempStartTime==0 && tempEndTime==0)
+		if (tempStartTime == 0 && tempEndTime == 0)
 			tempStartTime = msTicks;
-		else if (tempStartTime!=0 && tempEndTime==0) {
+		else if (tempStartTime != 0 && tempEndTime == 0) {
 			tempIntCount++;
 			if (tempIntCount == TEMP_HALF_PERIODS) {
 				tempEndTime = msTicks;
@@ -303,10 +300,14 @@ int main(void) {
 	NVIC_SetPriority(SysTick_IRQn, 0);
 
 	uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_flag = 0, invertedFlag =
-			0, sToMFlag = 0, mToSFlag = 1, displayFlag = 0, uartFlag = 0, rgbFlag = 0, ledFlag = 0;
+			0, sToMFlag = 0, mToSFlag = 1, displayFlag = 0, uartFlag = 0,
+			rgbFlag = 0, ledFlag = 0;
+	uint8_t currentRotaryVal;
 	uint32_t lightSensorVal = 0, tempSensorVal = 0;
-	int8_t firstTime = 1, val = 57, dir;
+	int8_t firstTime = 1, val = 57;
 	int uartCounter = 0;
+	int index = -1, logIndex;
+	Record record;
 	init_i2c();
 	init_GPIO();
 	init_ssp();
@@ -341,8 +342,8 @@ int main(void) {
 	NVIC_SetPriority(EINT3_IRQn, 31);
 
 	// Enable UART interrupts to send/receive
-	LPC_UART3->IER |= UART_IER_RBRINT_EN;
-	LPC_UART3->IER |= UART_IER_THREINT_EN;
+	LPC_UART3 ->IER |= UART_IER_RBRINT_EN;
+	LPC_UART3 ->IER |= UART_IER_THREINT_EN;
 	// Enable UART Rx Interrupt
 	UART_IntConfig(LPC_UART3, UART_INTCFG_RBR, ENABLE);
 	// Enable Interrupt for UART3
@@ -351,7 +352,7 @@ int main(void) {
 
 	oled_clearScreen(OLED_COLOR_BLACK);
 	led7seg_setChar('@', 0);
-	setRGB(0);
+	setRGB(RGB_RESET);
 	SysTick_Config(SystemCoreClock / 1000);
 
 	sevenSegIntroTime = msTicks;
@@ -376,34 +377,85 @@ int main(void) {
 
 	while (1) {
 
-		if (msTicks - introTime <= 10000) {
-			oled_putString(0, 0, (uint8_t *) "C.U.T.E", OLED_COLOR_WHITE,
-					OLED_COLOR_BLACK);
-			oled_line(0, 10, 42, 10, OLED_COLOR_WHITE);
-			oled_putString(0, 20, (uint8_t *) "BY", OLED_COLOR_WHITE,
-					OLED_COLOR_BLACK);
-			oled_putString(0, 40, (uint8_t *) "1. Pankaj B.", OLED_COLOR_WHITE,
-					OLED_COLOR_BLACK);
-			oled_putString(0, 50, (uint8_t *) "2. Zhao Hongwei",
-					OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-			if (firstTime) {
-				led7seg_setChar(val, 1);
-				firstTime = 0;
-			}
-			if (msTicks - sevenSegIntroTime >= 1000) {
-				led7seg_setChar(--val, 1);
-				sevenSegIntroTime = msTicks;
-			}
-			continue;
-		}
+//		if (msTicks - introTime <= 10000) {
+//			oled_putString(0, 0, (uint8_t *) "C.U.T.E", OLED_COLOR_WHITE,
+//					OLED_COLOR_BLACK);
+//			oled_line(0, 10, 42, 10, OLED_COLOR_WHITE);
+//			oled_putString(0, 20, (uint8_t *) "BY", OLED_COLOR_WHITE,
+//					OLED_COLOR_BLACK);
+//			oled_putString(0, 40, (uint8_t *) "1. Pankaj B.", OLED_COLOR_WHITE,
+//					OLED_COLOR_BLACK);
+//			oled_putString(0, 50, (uint8_t *) "2. Zhao Hongwei",
+//					OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+//			if (firstTime) {
+//				led7seg_setChar(val, 1);
+//				firstTime = 0;
+//			}
+//			if (msTicks - sevenSegIntroTime >= 1000) {
+//				led7seg_setChar(--val, 1);
+//				sevenSegIntroTime = msTicks;
+//			}
+//			continue;
+//		}
 
 		/* Log Mode */
-		if (logModeFlag==1)
-		{
-			//logModeFlag = 0;
+		if (logModeFlag == 1) {
+			int lightVal, aX, aY, aZ, segVal;
+			float tempVal;
+
+			oled_putString(0, 0, (uint8_t *) "VIEW LOG   ", OLED_COLOR_WHITE,
+					OLED_COLOR_BLACK);
+
+			currentRotaryVal = rotary_read();
+
+			if (currentRotaryVal == ROTARY_LEFT && logIndex != 0)
+				logIndex = (logIndex - 1);
+			else if (currentRotaryVal == ROTARY_RIGHT && logIndex != index)
+				logIndex = (logIndex + 1);
+
+			if (logIndex != -1) {
+				lightVal = records[logIndex].lightVal;
+				tempVal = records[logIndex].tempVal;
+				aX = records[logIndex].acc_x;
+				aY = records[logIndex].acc_y;
+				aZ = records[logIndex].acc_z;
+				segVal = records[logIndex].sevenSegVal;
+				displayValOn7Seg(segVal, 1);
+			} else {
+				lightVal = 0;
+				tempVal = 0.0;
+				aX = 0;
+				aY = 0;
+				aZ = 0;
+				led7seg_setChar('@', 0);
+			}
+
+			unsigned char TempPrint[40] = "";
+			unsigned char LightPrint[40] = "";
+
+			sprintf(TempPrint, "T : %02.2f ", tempVal);
+			strcat(TempPrint, "deg C");
+			oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,
+					OLED_COLOR_BLACK);
+
+			sprintf(LightPrint, "L : %5d ", lightVal);
+			strcat(LightPrint, "lux");
+			oled_putString(0, 20, (uint8_t *) LightPrint, OLED_COLOR_WHITE,
+					OLED_COLOR_BLACK);
+
+			char XPrint[20], YPrint[20], ZPrint[20];
+
+			sprintf(XPrint, "AX : %4d ", aX);
+			sprintf(YPrint, "AY : %4d ", aY);
+			sprintf(ZPrint, "AZ : %4d ", aZ);
+			oled_putString(0, 30, (uint8_t *) XPrint, OLED_COLOR_WHITE,
+					OLED_COLOR_BLACK);
+			oled_putString(0, 40, (uint8_t *) YPrint, OLED_COLOR_WHITE,
+					OLED_COLOR_BLACK);
+			oled_putString(0, 50, (uint8_t *) ZPrint, OLED_COLOR_WHITE,
+					OLED_COLOR_BLACK);
 
 			pca9532_setBlink1Leds(0xFFFF);
-			led7seg_setChar('@', 0); // turn off the display
 			blink_blue_flag = 0;
 			blink_red_flag = 0;
 			rgbFlag = 0;
@@ -419,14 +471,14 @@ int main(void) {
 			flag = !flag;
 		}
 
-		if (flag==1) {
+		if (flag == 1) {
 //			if (msTicks - tempLightTick >= 500) {
 //				tempSensorVal = temp_read();
-			if (ledFlag==1 || sToMFlag==1) {
+			if (ledFlag == 1 || sToMFlag == 1) {
 				pca9532_setLeds(0xFF00, 0xFFFF);
 				ledFlag = 0;
 			}
-			if (sToMFlag==1) {
+			if (sToMFlag == 1) {
 				oled_clearScreen(OLED_COLOR_BLACK);
 				oled_putString(0, 0, (uint8_t *) "MONITOR", OLED_COLOR_WHITE,
 						OLED_COLOR_BLACK);
@@ -483,7 +535,7 @@ int main(void) {
 //								ledTick = msTicks;
 //							}
 			}
-			if (invertedNormally(acc_x, acc_y, acc_z)==1) { //to be done based on accelerometer reading
+			if (invertedNormally(acc_x, acc_y, acc_z) == 1) { //to be done based on accelerometer reading
 				invertedFlag = 1;
 			} else {
 				invertedFlag = 0;
@@ -492,40 +544,44 @@ int main(void) {
 				blinkTick = msTicks;
 				blink_flag = !blink_flag;
 			}
-			if (lightIntFlag==1) {
+			if (lightIntFlag == 1) {
 				lightIntFlag = 0;
-				if ((msTicks-tTicks >= 400) && (blink_blue_flag==0) && (movementDetected()==1)) {
+				if ((msTicks - tTicks >= 400) && (blink_blue_flag == 0)
+						&& (movementDetected() == 1)) {
 					blink_blue_flag = 1;
 				}
 
 			}
-			if (tempIntFlag==1) {
+			if (tempIntFlag == 1) {
 				tempIntFlag = 0;
 				//if (tempEndTime > tempStartTime)
 				tempEndTime = tempEndTime - tempStartTime;
 				//else tempEndTime = 0xFFFFFFFF - tempStartTime + 1 + tempEndTime;
 				//tempSensorVal = ((tempEndTime) / (TEMP_HALF_PERIODS*10)) - 273;
 				//tempSensorVal = tempEndTime;
-				tempSensorVal = ((2*1000*tempEndTime) / TEMP_HALF_PERIODS) - 2731;
+				tempSensorVal = ((2 * 1000 * tempEndTime) / TEMP_HALF_PERIODS)
+						- 2731;
 				//tempSensorVal /= 100;
 				tempIntCount = 0;
 				tempStartTime = 0;
 				tempEndTime = 0;
-				if ((msTicks-tTicks >= 400) && (blink_red_flag==0) && (movementDetected()==1) && (tempSensorVal >= TEMP_HIGH_WARNING)) {
+				if ((msTicks - tTicks >= 400) && (blink_red_flag == 0)
+						&& (movementDetected() == 1)
+						&& (tempSensorVal >= TEMP_HIGH_WARNING)) {
 					blink_red_flag = 1;
 				}
 			}
 			//if (rgbFlag || movementDetected()) {
-			if (blink_flag==1)
+			if (blink_flag == 1)
 				setRGB(RGB_RESET);
 			else {
-				if ((blink_blue_flag==1) && (blink_red_flag==1)) {
+				if ((blink_blue_flag == 1) && (blink_red_flag == 1)) {
 					setRGB(RGB_RED_BLUE);
 					rgbFlag = 1;
-				} else if (blink_blue_flag==1) {
+				} else if (blink_blue_flag == 1) {
 					setRGB(RGB_BLUE);
 					rgbFlag = 1;
-				} else if (blink_red_flag==1) {
+				} else if (blink_red_flag == 1) {
 					setRGB(RGB_RED);
 					rgbFlag = 1;
 				} else
@@ -541,14 +597,17 @@ int main(void) {
 
 			if (sevenSegVal == 8 || sevenSegVal == 13 || sevenSegVal == 2)
 				displayFlag = 1;
-			if (displayFlag==1
+			if (displayFlag == 1
 					&& (sevenSegVal == 6 || sevenSegVal == 11
 							|| sevenSegVal == 0)) {
 				displayFlag = 0;
 				unsigned char TempPrint[40] = "";
 				unsigned char LightPrint[40] = "";
 
-				sprintf(TempPrint, "T : %.2f ", tempSensorVal/100.0);
+				oled_putString(0, 0, (uint8_t *) "MONITOR       ", OLED_COLOR_WHITE,
+										OLED_COLOR_BLACK);
+
+				sprintf(TempPrint, "T : %.2f ", tempSensorVal / 100.0);
 				strcat(TempPrint, "deg C");
 				oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,
 						OLED_COLOR_BLACK);
@@ -570,29 +629,36 @@ int main(void) {
 						OLED_COLOR_BLACK);
 				oled_putString(0, 50, (uint8_t *) ZPrint, OLED_COLOR_WHITE,
 						OLED_COLOR_BLACK);
+				record.lightVal = lightSensorVal;
+				record.tempVal = tempSensorVal / 100.0;
+				record.acc_x = acc_x;
+				record.acc_y = acc_y;
+				record.acc_z = acc_z;
+				record.sevenSegVal =
+						(sevenSegVal != 0) ? (sevenSegVal - 1) : 15;
+				index = (index + 1) % NUM_RECORDS;
+				records[index] = record;
+				logIndex = index;
 			}
 
-			if (sevenSegVal != 0) {
-
-			}
 			if (sevenSegVal == 14)
 				uartFlag = 1;
-			if (uartFlag==1 && sevenSegVal == 0) {
+			if (uartFlag == 1 && sevenSegVal == 0) {
 				uartFlag = 0;
 				char uartMessage[255] = "";
-				if (blink_red_flag==1) {
+				if (blink_red_flag == 1) {
 					strcat(&uartMessage,
 							"Fire was Detected.                                         \r\n");
 				}
-				if (blink_blue_flag==1) {
+				if (blink_blue_flag == 1) {
 					strcat(&uartMessage,
 							"Movement in darkness was Detected.                                   \r\n");
 				}
 				char values[255] = "";
 				sprintf(&values,
 						"%03d_-_T%.2f_L%d_AX%d_AY%d_AZ%d                             ",
-						uartCounter, tempSensorVal/100.0, lightSensorVal, acc_x,
-						acc_y, acc_z);
+						uartCounter, tempSensorVal / 100.0, lightSensorVal,
+						acc_x, acc_y, acc_z);
 				strcat(&uartMessage, &values);
 				uart_sendMessage(uartMessage);
 				uartCounter++;
@@ -602,14 +668,14 @@ int main(void) {
 			//the 3 sensors should not be reading values here
 			//UART should not be getting any message
 			sToMFlag = 1;
-			if (ledFlag==1 || mToSFlag==1) {
+			if (ledFlag == 1 || mToSFlag == 1) {
 				pca9532_setLeds(0x00FF, 0xFFFF);
 				ledFlag = 0;
 			}
-			if (mToSFlag) {
-     			oled_clearScreen(OLED_COLOR_BLACK);
-     			mToSFlag = 0;
-			}
+			//if (mToSFlag) {
+			oled_clearScreen(OLED_COLOR_BLACK);
+			//mToSFlag = 0;
+			//}
 			led7seg_setChar('@', 0); // turn off the display
 			blink_blue_flag = 0;
 			blink_red_flag = 0;
