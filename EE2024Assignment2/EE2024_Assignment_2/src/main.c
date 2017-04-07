@@ -37,7 +37,7 @@ uint32_t sevenSegTime, sevenSegIntroTime, mainTick, blueRedTicks, blueTicks,
 		accTicks, redTicks, blinkTick, invertedTick, introTime, ledTick, tTicks,
 		tempLightTick, tempStartTime = 0, tempEndTime = 0, tempIntCount = 0;
 uint8_t blink_blue_flag = 0, blink_red_flag = 0, noMovementFlag = 0,
-		lightIntFlag = 0, tempIntFlag = 0;
+		lightIntFlag = 0, tempIntFlag = 0, logModeFlag = 0;
 int8_t acc_x = 0, acc_y = 0, acc_z = 0, x = 0, y = 0, z = 0, xoff, yoff, zoff,
 		led_y;
 
@@ -258,6 +258,7 @@ void EINT3_IRQHandler(void) {
 	if ((LPC_GPIOINT ->IO2IntStatF >> 10) & 0x1) {
 		// Clear GPIO Interrupt P2.10
 		LPC_GPIOINT ->IO2IntClr = 1 << 10;
+		logModeFlag = !logModeFlag;
 	}
 
 	//acc_read(&acc_x, &acc_y, &acc_z);
@@ -302,7 +303,7 @@ int main(void) {
 	NVIC_SetPriority(SysTick_IRQn, 0);
 
 	uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_flag = 0, invertedFlag =
-			0, sToMFlag = 0, mToSFlag = 1, displayFlag = 0, uartFlag = 0, rgbFlag = 0;
+			0, sToMFlag = 0, mToSFlag = 1, displayFlag = 0, uartFlag = 0, rgbFlag = 0, ledFlag = 0;
 	uint32_t lightSensorVal = 0, tempSensorVal = 0;
 	int8_t firstTime = 1, val = 57, dir;
 	int uartCounter = 0;
@@ -312,7 +313,10 @@ int main(void) {
 	init_uart();
 
 	pca9532_init();
+	pca9532_setBlink1Period(250);
+	pca9532_setBlink1Duty(50);
 	joystick_init();
+	rotary_init();
 	light_enable();
 	led7seg_init();
 	oled_init();
@@ -336,6 +340,9 @@ int main(void) {
 	NVIC_EnableIRQ(EINT3_IRQn);
 	NVIC_SetPriority(EINT3_IRQn, 31);
 
+	// Enable UART interrupts to send/receive
+	LPC_UART3->IER |= UART_IER_RBRINT_EN;
+	LPC_UART3->IER |= UART_IER_THREINT_EN;
 	// Enable UART Rx Interrupt
 	UART_IntConfig(LPC_UART3, UART_INTCFG_RBR, ENABLE);
 	// Enable Interrupt for UART3
@@ -369,7 +376,7 @@ int main(void) {
 
 	while (1) {
 
-		if (msTicks - introTime <= 11000) {
+		if (msTicks - introTime <= 10000) {
 			oled_putString(0, 0, (uint8_t *) "C.U.T.E", OLED_COLOR_WHITE,
 					OLED_COLOR_BLACK);
 			oled_line(0, 10, 42, 10, OLED_COLOR_WHITE);
@@ -390,13 +397,20 @@ int main(void) {
 			continue;
 		}
 
-//		if (noMovementFlag) {
-//			light_setRange(LIGHT_RANGE_4000);
-//			light_setLoThreshold(LIGHT_LOW_WARNING);
-//			light_setIrqInCycles(LIGHT_CYCLE_1);
-//			light_clearIrqStatus();
-//			noMovementFlag = 0;
-//		}
+		/* Log Mode */
+		if (logModeFlag==1)
+		{
+			//logModeFlag = 0;
+
+			pca9532_setBlink1Leds(0xFFFF);
+			led7seg_setChar('@', 0); // turn off the display
+			blink_blue_flag = 0;
+			blink_red_flag = 0;
+			rgbFlag = 0;
+			ledFlag = 1;
+			setRGB(RGB_RESET);
+			continue;
+		}
 
 		btn1 = (GPIO_ReadValue(1) >> 31) & 0x01; //reading from SW4
 
@@ -408,6 +422,10 @@ int main(void) {
 		if (flag==1) {
 //			if (msTicks - tempLightTick >= 500) {
 //				tempSensorVal = temp_read();
+			if (ledFlag==1 || sToMFlag==1) {
+				pca9532_setLeds(0xFF00, 0xFFFF);
+				ledFlag = 0;
+			}
 			if (sToMFlag==1) {
 				oled_clearScreen(OLED_COLOR_BLACK);
 				oled_putString(0, 0, (uint8_t *) "MONITOR", OLED_COLOR_WHITE,
@@ -453,17 +471,17 @@ int main(void) {
 				acc_x = acc_x + xoff;
 				acc_y = acc_y + yoff;
 				acc_z = acc_z + zoff;
-				led_y = acc_y;
-				if (led_y < 0) {
-					dir = 1;
-					led_y = -led_y;
-				} else {
-					dir = -1;
-				}
-				if (led_y > 1 && (msTicks - ledTick) >= (40 / (1 + (led_y / 10)))) {
-								moveBar(1, dir);
-								ledTick = msTicks;
-							}
+//				led_y = acc_y;
+//				if (led_y < 0) {
+//					dir = 1;
+//					led_y = -led_y;
+//				} else {
+//					dir = -1;
+//				}
+//				if (led_y > 1 && (msTicks - ledTick) >= (40 / (1 + (led_y / 10)))) {
+//								moveBar(1, dir);
+//								ledTick = msTicks;
+//							}
 			}
 			if (invertedNormally(acc_x, acc_y, acc_z)==1) { //to be done based on accelerometer reading
 				invertedFlag = 1;
@@ -584,10 +602,14 @@ int main(void) {
 			//the 3 sensors should not be reading values here
 			//UART should not be getting any message
 			sToMFlag = 1;
-//			if (mToSFlag) {
-			oled_clearScreen(OLED_COLOR_BLACK);
-//				mToSFlag = 0;
-//			}
+			if (ledFlag==1 || mToSFlag==1) {
+				pca9532_setLeds(0x00FF, 0xFFFF);
+				ledFlag = 0;
+			}
+			if (mToSFlag) {
+     			oled_clearScreen(OLED_COLOR_BLACK);
+     			mToSFlag = 0;
+			}
 			led7seg_setChar('@', 0); // turn off the display
 			blink_blue_flag = 0;
 			blink_red_flag = 0;
@@ -597,7 +619,6 @@ int main(void) {
 			//	OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 			noMovementFlag = 1;
 			tTicks = msTicks;
-			pca9532_setLeds(0, 0);
 		}
 	}
 
