@@ -33,7 +33,7 @@
 #define RGB_RESET 0x00
 #define ROTARY_RIGHT 0x01
 #define ROTARY_LEFT 0x02
-#define NUM_RECORDS 25
+#define NUM_RECORDS 999
 
 uint32_t msTicks = 0;
 uint32_t sevenSegTime, sevenSegIntroTime, mainTick, blueRedTicks, blueTicks,
@@ -301,12 +301,12 @@ int main(void) {
 
 	uint8_t btn1 = 1, flag = 0, sevenSegVal = 0, blink_flag = 0, invertedFlag =
 			0, sToMFlag = 0, mToSFlag = 1, displayFlag = 0, uartFlag = 0,
-			rgbFlag = 0, ledFlag = 0;
+			rgbFlag = 0, ledFlag = 0, lToMFlag = 0;
 	uint8_t currentRotaryVal;
 	uint32_t lightSensorVal = 0, tempSensorVal = 0;
 	int8_t firstTime = 1, val = 57;
 	int uartCounter = 0;
-	int index = -1, logIndex;
+	int index = -1, logIndex = -1;
 	Record record;
 	init_i2c();
 	init_GPIO();
@@ -402,12 +402,12 @@ int main(void) {
 		if (logModeFlag == 1) {
 			int lightVal, aX, aY, aZ, segVal;
 			float tempVal;
+			lToMFlag = 1;
 
 			oled_putString(0, 0, (uint8_t *) "VIEW LOG   ", OLED_COLOR_WHITE,
 					OLED_COLOR_BLACK);
 
 			currentRotaryVal = rotary_read();
-
 			if (currentRotaryVal == ROTARY_LEFT && logIndex != 0)
 				logIndex = (logIndex - 1);
 			else if (currentRotaryVal == ROTARY_RIGHT && logIndex != index)
@@ -424,6 +424,10 @@ int main(void) {
 			} else {
 				lightVal = 0;
 				tempVal = 0.0;
+				unsigned char TempPrint1[40] = "";
+				strcat(TempPrint1, "T :  0.00 deg C");
+				oled_putString(0, 10, (uint8_t *) TempPrint1, OLED_COLOR_WHITE,
+						OLED_COLOR_BLACK);
 				aX = 0;
 				aY = 0;
 				aZ = 0;
@@ -432,12 +436,12 @@ int main(void) {
 
 			unsigned char TempPrint[40] = "";
 			unsigned char LightPrint[40] = "";
-
-			sprintf(TempPrint, "T : %02.2f ", tempVal);
-			strcat(TempPrint, "deg C");
-			oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,
-					OLED_COLOR_BLACK);
-
+			if (tempVal != 0.0) {
+				sprintf(TempPrint, "T : %02.2f ", tempVal);
+				strcat(TempPrint, "deg C");
+				oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,
+						OLED_COLOR_BLACK);
+			}
 			sprintf(LightPrint, "L : %5d ", lightVal);
 			strcat(LightPrint, "lux");
 			oled_putString(0, 20, (uint8_t *) LightPrint, OLED_COLOR_WHITE,
@@ -472,6 +476,13 @@ int main(void) {
 		}
 
 		if (flag == 1) {
+			if (lToMFlag == 1) {
+				lToMFlag = 0;
+				logIndex = index;
+				oled_putString(0, 0, (uint8_t *) "MONITOR       ",
+						OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+			}
+
 //			if (msTicks - tempLightTick >= 500) {
 //				tempSensorVal = temp_read();
 			if (ledFlag == 1 || sToMFlag == 1) {
@@ -603,9 +614,6 @@ int main(void) {
 				displayFlag = 0;
 				unsigned char TempPrint[40] = "";
 				unsigned char LightPrint[40] = "";
-
-				oled_putString(0, 0, (uint8_t *) "MONITOR       ", OLED_COLOR_WHITE,
-										OLED_COLOR_BLACK);
 
 				sprintf(TempPrint, "T : %.2f ", tempSensorVal / 100.0);
 				strcat(TempPrint, "deg C");
