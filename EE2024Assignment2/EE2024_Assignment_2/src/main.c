@@ -267,21 +267,12 @@ void EINT3_IRQHandler(void) {
 		logModeFlag = !logModeFlag;
 	}
 
-	//acc_read(&acc_x, &acc_y, &acc_z);
-	//acc_x = acc_x + xoff;
-	//acc_y = acc_y + yoff;
-	//acc_z = acc_z + zoff;
-	//if (movementDetected()) {
 	// Determine whether GPIO Interrupt P2.5 has occurred - Light Sensor and Accelerometer
 	if ((LPC_GPIOINT ->IO2IntStatF >> 5) & 0x1) {
 		LPC_GPIOINT ->IO2IntClr = 1 << 5;
 		light_clearIrqStatus();
 		lightIntFlag = 1;
-		//if (movementDetected()) blink_blue_flag = 1;
-		//else noMovementFlag = 1;
 	}
-
-	// Separate interrupt needed for accelerometer ?????
 
 	// Determine whether GPIO Interrupt P0.2 has occurred - Temperature Sensor
 	if ((LPC_GPIOINT ->IO0IntStatF >> 2) & 0x1) {
@@ -296,7 +287,6 @@ void EINT3_IRQHandler(void) {
 		}
 		LPC_GPIOINT ->IO0IntClr = 1 << 2;
 	}
-	//}
 }
 
 // UART3 Interrupt Handler
