@@ -24,7 +24,7 @@
 #define NOTE_PIN_HIGH() GPIO_SetValue(0, 1<<26);
 #define NOTE_PIN_LOW()  GPIO_ClearValue(0, 1<<26);
 
-#define TEMP_HIGH_WARNING 2500
+#define TEMP_HIGH_WARNING 250
 #define LIGHT_LOW_WARNING 50
 #define TEMP_HALF_PERIODS 170
 #define RGB_RED 0x01
@@ -521,7 +521,6 @@ int main(void) {
 				sToMFlag = 0;
 				lightIntFlag = 0;
 			}
-//			lightSensorVal = light_read();
 //				tempLightTick = msTicks;
 //			}
 			mToSFlag = 1;
@@ -534,26 +533,31 @@ int main(void) {
 				acc_x = acc_x + xoff;
 				acc_y = acc_y + yoff;
 				acc_z = acc_z + zoff;
-//				led_y = acc_y;
-//				if (led_y < 0) {
-//					dir = 1;
-//					led_y = -led_y;
-//				} else {
-//					dir = -1;
-//				}
-//				if (led_y > 1 && (msTicks - ledTick) >= (40 / (1 + (led_y / 10)))) {
-//								moveBar(1, dir);
-//								ledTick = msTicks;
-//							}
-			}
-			if (invertedNormally(acc_x, acc_y, acc_z) == 1) { //to be done based on accelerometer reading
-				invertedFlag = 1;
-			} else {
-				invertedFlag = 0;
+				if (invertedNormally(acc_x, acc_y, acc_z) == 1) { //to be done based on accelerometer reading
+					invertedFlag = 1;
+				} else {
+					invertedFlag = 0;
+				}
+				lightSensorVal = light_read();
 			}
 			if (msTicks - blinkTick >= 333) {
 				blinkTick = msTicks;
 				blink_flag = !blink_flag;
+				if (blink_flag == 1)
+					setRGB(RGB_RESET);
+				else {
+					if ((blink_blue_flag == 1) && (blink_red_flag == 1)) {
+						setRGB(RGB_RED_BLUE);
+						rgbFlag = 1;
+					} else if (blink_blue_flag == 1) {
+						setRGB(RGB_BLUE);
+						rgbFlag = 1;
+					} else if (blink_red_flag == 1) {
+						setRGB(RGB_RED);
+						rgbFlag = 1;
+					} else
+						setRGB(RGB_RESET);
+				}
 			}
 			if (lightIntFlag == 1) {
 				lightIntFlag = 0;
@@ -570,9 +574,8 @@ int main(void) {
 				//else tempEndTime = 0xFFFFFFFF - tempStartTime + 1 + tempEndTime;
 				//tempSensorVal = ((tempEndTime) / (TEMP_HALF_PERIODS*10)) - 273;
 				//tempSensorVal = tempEndTime;
-				tempSensorVal = ((2 * 1000 * tempEndTime) / TEMP_HALF_PERIODS)
+				tempSensorVal = ((1000.0 * tempEndTime) / TEMP_HALF_PERIODS)
 						- 2731;
-				//tempSensorVal /= 100;
 				tempIntCount = 0;
 				tempStartTime = 0;
 				tempEndTime = 0;
@@ -583,94 +586,159 @@ int main(void) {
 				}
 			}
 			//if (rgbFlag || movementDetected()) {
-			if (blink_flag == 1)
-				setRGB(RGB_RESET);
-			else {
-				if ((blink_blue_flag == 1) && (blink_red_flag == 1)) {
-					setRGB(RGB_RED_BLUE);
-					rgbFlag = 1;
-				} else if (blink_blue_flag == 1) {
-					setRGB(RGB_BLUE);
-					rgbFlag = 1;
-				} else if (blink_red_flag == 1) {
-					setRGB(RGB_RED);
-					rgbFlag = 1;
-				} else
-					setRGB(RGB_RESET);
-			}
+//			if (blink_flag == 1)
+//				setRGB(RGB_RESET);
+//			else {
+//				if ((blink_blue_flag == 1) && (blink_red_flag == 1)) {
+//					setRGB(RGB_RED_BLUE);
+//					rgbFlag = 1;
+//				} else if (blink_blue_flag == 1) {
+//					setRGB(RGB_BLUE);
+//					rgbFlag = 1;
+//				} else if (blink_red_flag == 1) {
+//					setRGB(RGB_RED);
+//					rgbFlag = 1;
+//				} else
+//					setRGB(RGB_RESET);
+//			}
 			//}
 
 			if (msTicks - sevenSegTime >= 1000) {
 				sevenSegTime = msTicks;
 				displayValOn7Seg(sevenSegVal, invertedFlag);
 				sevenSegVal = (sevenSegVal + 1) % 16;
-			}
+				if (sevenSegVal == 8 || sevenSegVal == 13 || sevenSegVal == 2)
+					displayFlag = 1;
+				if (displayFlag == 1
+						&& (sevenSegVal == 6 || sevenSegVal == 11
+								|| sevenSegVal == 0)) {
+					displayFlag = 0;
+					unsigned char TempPrint[40] = "";
+					unsigned char LightPrint[40] = "";
 
-			if (sevenSegVal == 8 || sevenSegVal == 13 || sevenSegVal == 2)
-				displayFlag = 1;
-			if (displayFlag == 1
-					&& (sevenSegVal == 6 || sevenSegVal == 11
-							|| sevenSegVal == 0)) {
-				displayFlag = 0;
-				unsigned char TempPrint[40] = "";
-				unsigned char LightPrint[40] = "";
+					sprintf(TempPrint, "T : %.2f ", tempSensorVal / 10.0);
+					strcat(TempPrint, "deg C");
+					oled_putString(0, 10, (uint8_t *) TempPrint,
+							OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-				sprintf(TempPrint, "T : %.2f ", tempSensorVal / 100.0);
-				strcat(TempPrint, "deg C");
-				oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,
-						OLED_COLOR_BLACK);
+					//lightSensorVal = light_read();
+					sprintf(LightPrint, "L : %5d ", lightSensorVal);
+					strcat(LightPrint, "lux");
+					oled_putString(0, 20, (uint8_t *) LightPrint,
+							OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-				lightSensorVal = light_read();
-				sprintf(LightPrint, "L : %5d ", lightSensorVal);
-				strcat(LightPrint, "lux");
-				oled_putString(0, 20, (uint8_t *) LightPrint, OLED_COLOR_WHITE,
-						OLED_COLOR_BLACK);
+					char XPrint[20], YPrint[20], ZPrint[20];
 
-				char XPrint[20], YPrint[20], ZPrint[20];
-
-				sprintf(XPrint, "AX : %4d ", acc_x);
-				sprintf(YPrint, "AY : %4d ", acc_y);
-				sprintf(ZPrint, "AZ : %4d ", acc_z);
-				oled_putString(0, 30, (uint8_t *) XPrint, OLED_COLOR_WHITE,
-						OLED_COLOR_BLACK);
-				oled_putString(0, 40, (uint8_t *) YPrint, OLED_COLOR_WHITE,
-						OLED_COLOR_BLACK);
-				oled_putString(0, 50, (uint8_t *) ZPrint, OLED_COLOR_WHITE,
-						OLED_COLOR_BLACK);
-				record.lightVal = lightSensorVal;
-				record.tempVal = tempSensorVal / 100.0;
-				record.acc_x = acc_x;
-				record.acc_y = acc_y;
-				record.acc_z = acc_z;
-				record.sevenSegVal =
-						(sevenSegVal != 0) ? (sevenSegVal - 1) : 15;
-				index = (index + 1) % NUM_RECORDS;
-				records[index] = record;
-				logIndex = index;
-			}
-
-			if (sevenSegVal == 14)
-				uartFlag = 1;
-			if (uartFlag == 1 && sevenSegVal == 0) {
-				uartFlag = 0;
-				char uartMessage[255] = "";
-				if (blink_red_flag == 1) {
-					strcat(&uartMessage,
-							"Fire was Detected.                                         \r\n");
+					sprintf(XPrint, "AX : %4d ", acc_x);
+					sprintf(YPrint, "AY : %4d ", acc_y);
+					sprintf(ZPrint, "AZ : %4d ", acc_z);
+					oled_putString(0, 30, (uint8_t *) XPrint, OLED_COLOR_WHITE,
+							OLED_COLOR_BLACK);
+					oled_putString(0, 40, (uint8_t *) YPrint, OLED_COLOR_WHITE,
+							OLED_COLOR_BLACK);
+					oled_putString(0, 50, (uint8_t *) ZPrint, OLED_COLOR_WHITE,
+							OLED_COLOR_BLACK);
+					record.lightVal = lightSensorVal;
+					record.tempVal = tempSensorVal / 10.0;
+					record.acc_x = acc_x;
+					record.acc_y = acc_y;
+					record.acc_z = acc_z;
+					record.sevenSegVal =
+							(sevenSegVal != 0) ? (sevenSegVal - 1) : 15;
+					index = (index + 1) % NUM_RECORDS;
+					records[index] = record;
+					logIndex = index;
 				}
-				if (blink_blue_flag == 1) {
-					strcat(&uartMessage,
-							"Movement in darkness was Detected.                                   \r\n");
+
+				if (sevenSegVal == 14)
+					uartFlag = 1;
+				if (uartFlag == 1 && sevenSegVal == 0) {
+					uartFlag = 0;
+					char uartMessage[255] = "";
+					if (blink_red_flag == 1) {
+						strcat(&uartMessage,
+								"Fire was Detected.                                         \r\n");
+					}
+					if (blink_blue_flag == 1) {
+						strcat(&uartMessage,
+								"Movement in darkness was Detected.                                   \r\n");
+					}
+					char values[255] = "";
+					sprintf(&values,
+							"%03d_-_T%.2f_L%d_AX%d_AY%d_AZ%d                             ",
+							uartCounter, tempSensorVal / 10.0, lightSensorVal,
+							acc_x, acc_y, acc_z);
+					strcat(&uartMessage, &values);
+					uart_sendMessage(uartMessage);
+					uartCounter++;
 				}
-				char values[255] = "";
-				sprintf(&values,
-						"%03d_-_T%.2f_L%d_AX%d_AY%d_AZ%d                             ",
-						uartCounter, tempSensorVal / 100.0, lightSensorVal,
-						acc_x, acc_y, acc_z);
-				strcat(&uartMessage, &values);
-				uart_sendMessage(uartMessage);
-				uartCounter++;
 			}
+
+//			if (sevenSegVal == 8 || sevenSegVal == 13 || sevenSegVal == 2)
+//				displayFlag = 1;
+//			if (displayFlag == 1
+//					&& (sevenSegVal == 6 || sevenSegVal == 11
+//							|| sevenSegVal == 0)) {
+//				displayFlag = 0;
+//				unsigned char TempPrint[40] = "";
+//				unsigned char LightPrint[40] = "";
+//
+//				sprintf(TempPrint, "T : %.2f ", tempSensorVal / 10.0);
+//				strcat(TempPrint, "deg C");
+//				oled_putString(0, 10, (uint8_t *) TempPrint, OLED_COLOR_WHITE,
+//						OLED_COLOR_BLACK);
+//
+//				lightSensorVal = light_read();
+//				sprintf(LightPrint, "L : %5d ", lightSensorVal);
+//				strcat(LightPrint, "lux");
+//				oled_putString(0, 20, (uint8_t *) LightPrint, OLED_COLOR_WHITE,
+//						OLED_COLOR_BLACK);
+//
+//				char XPrint[20], YPrint[20], ZPrint[20];
+//
+//				sprintf(XPrint, "AX : %4d ", acc_x);
+//				sprintf(YPrint, "AY : %4d ", acc_y);
+//				sprintf(ZPrint, "AZ : %4d ", acc_z);
+//				oled_putString(0, 30, (uint8_t *) XPrint, OLED_COLOR_WHITE,
+//						OLED_COLOR_BLACK);
+//				oled_putString(0, 40, (uint8_t *) YPrint, OLED_COLOR_WHITE,
+//						OLED_COLOR_BLACK);
+//				oled_putString(0, 50, (uint8_t *) ZPrint, OLED_COLOR_WHITE,
+//						OLED_COLOR_BLACK);
+//				record.lightVal = lightSensorVal;
+//				record.tempVal = tempSensorVal / 10.0;
+//				record.acc_x = acc_x;
+//				record.acc_y = acc_y;
+//				record.acc_z = acc_z;
+//				record.sevenSegVal =
+//						(sevenSegVal != 0) ? (sevenSegVal - 1) : 15;
+//				index = (index + 1) % NUM_RECORDS;
+//				records[index] = record;
+//				logIndex = index;
+//			}
+//
+//			if (sevenSegVal == 14)
+//				uartFlag = 1;
+//			if (uartFlag == 1 && sevenSegVal == 0) {
+//				uartFlag = 0;
+//				char uartMessage[255] = "";
+//				if (blink_red_flag == 1) {
+//					strcat(&uartMessage,
+//							"Fire was Detected.                                         \r\n");
+//				}
+//				if (blink_blue_flag == 1) {
+//					strcat(&uartMessage,
+//							"Movement in darkness was Detected.                                   \r\n");
+//				}
+//				char values[255] = "";
+//				sprintf(&values,
+//						"%03d_-_T%.2f_L%d_AX%d_AY%d_AZ%d                             ",
+//						uartCounter, tempSensorVal / 10.0, lightSensorVal,
+//						acc_x, acc_y, acc_z);
+//				strcat(&uartMessage, &values);
+//				uart_sendMessage(uartMessage);
+//				uartCounter++;
+//			}
 
 		} else {
 			//the 3 sensors should not be reading values here
