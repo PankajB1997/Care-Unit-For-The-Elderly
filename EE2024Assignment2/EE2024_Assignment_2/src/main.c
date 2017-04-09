@@ -347,8 +347,7 @@ void initializeInterrupts() {
 	NVIC_SetPriority(UART3_IRQn, 1);
 }
 
-void setInitialDeviceValues(int8_t acc_x, int8_t acc_y, int8_t acc_z, int8_t x,
-		int8_t y, int8_t z, int8_t xoff, int8_t yoff, int8_t zoff) {
+void setInitialDeviceValues() {
 	oled_clearScreen(OLED_COLOR_BLACK);
 	led7seg_setChar('@', 0);
 	setRGB(RGB_RESET);
@@ -363,10 +362,7 @@ void setInitialDeviceValues(int8_t acc_x, int8_t acc_y, int8_t acc_z, int8_t x,
 	zoff = 64 - z;
 }
 
-void setVariousTicks(uint32_t sevenSegIntroTime, uint32_t msTicks,
-		uint32_t sevenSegTime, uint32_t mainTick, uint32_t blinkTick,
-		uint32_t invertedTick, uint32_t introTime, uint32_t ledTick,
-		uint32_t tempLightTick, uint32_t accTicks, uint32_t tTicks) {
+void setVariousTicks() {
 	sevenSegIntroTime = msTicks;
 	sevenSegTime = msTicks;
 	mainTick = msTicks;
@@ -379,8 +375,7 @@ void setVariousTicks(uint32_t sevenSegIntroTime, uint32_t msTicks,
 	tTicks = msTicks;
 }
 
-void runStartupScreen(int8_t firstTime, int8_t val, uint32_t msTicks,
-		uint32_t sevenSegIntroTime) {
+void runStartupScreen() {
 	oled_putString(0, 0, (uint8_t*) "C.U.T.E", OLED_COLOR_WHITE,
 			OLED_COLOR_BLACK);
 	oled_line(0, 10, 42, 10, OLED_COLOR_WHITE);
@@ -399,9 +394,7 @@ void runStartupScreen(int8_t firstTime, int8_t val, uint32_t msTicks,
 	}
 }
 
-void runStableState(uint8_t sToMFlag, uint8_t ledFlag, uint8_t mToSFlag,
-		uint8_t blink_blue_flag, uint8_t blink_red_flag, uint8_t rgbFlag,
-		uint8_t noMovementFlag, uint32_t tTicks, uint32_t msTicks) {
+void runStableState() {
 	//the 3 sensors should not be reading values here
 	//UART should not be getting any message
 	sToMFlag = 1;
@@ -675,16 +668,14 @@ int main(void) {
 
 	initializeDevices();
 	initializeInterrupts();
-	setInitialDeviceValues(acc_x, acc_y, acc_z, x, y, z, xoff, yoff, zoff);
-	setVariousTicks(sevenSegIntroTime, msTicks, sevenSegTime, mainTick,
-			blinkTick, invertedTick, introTime, ledTick, tempLightTick,
-			accTicks, tTicks);
+	setInitialDeviceValues();
+	setVariousTicks();
 
 	while (1) {
 
 		/* first 10 seconds after startup */
 		if (msTicks - introTime <= 10000) {
-			runStartupScreen(firstTime, val, msTicks, sevenSegIntroTime);
+			runStartupScreen();
 			continue;
 		}
 
@@ -704,8 +695,7 @@ int main(void) {
 		if (isMonitorModeFlag == 1) {
 			runMonitorMode();
 		} else {
-			runStableState(sToMFlag, ledFlag, mToSFlag, blink_blue_flag,
-					blink_red_flag, rgbFlag, noMovementFlag, tTicks, msTicks);
+			runStableState();
 		}
 	}
 }
