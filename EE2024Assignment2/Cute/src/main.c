@@ -56,7 +56,7 @@ Record records[NUM_RECORDS];
 
 uint8_t checkModeButton = 1, isMonitorModeFlag = 0, sevenSegVal = 0,
 		blink_flag = 0, invertedFlag = 0, sToMFlag = 0, mToSFlag = 1,
-		displayFlag = 0, uartFlag = 0, rgbFlag = 0, ledFlag = 0, lToMFlag = 0;
+		displayFlag = 0, uartFlag = 0, rgbFlag = 0, ledFlag = 0, lToMorSFlag = 0;
 uint8_t currentRotaryVal;
 uint32_t lightSensorVal = 0, tempSensorVal = 0;
 int8_t firstTime = 1, val = 57;
@@ -267,7 +267,7 @@ void EINT3_IRQHandler(void) {
 		logModeFlag = !logModeFlag;
 	}
 
-	// Determine whether GPIO Interrupt P2.5 has occurred - Light Sensor and Accelerometer
+	// Determine whether GPIO Interrupt P2.5 has occurred - Light Sensor
 	if ((LPC_GPIOINT ->IO2IntStatF >> 5) & 0x1) {
 		LPC_GPIOINT ->IO2IntClr = 1 << 5;
 		light_clearIrqStatus();
@@ -352,7 +352,7 @@ void setInitialDeviceValues() {
 	zoff = 64 - z;
 }
 
-void setVariousTicks() {
+void setTicks() {
 	sevenSegIntroTime = msTicks;
 	sevenSegTime = msTicks;
 	mainTick = msTicks;
@@ -388,6 +388,11 @@ void runStableState() {
 	//the 3 sensors should not be reading values here
 	//UART should not be getting any message
 	sToMFlag = 1;
+	/* check if switching from log mode to monitor mode */
+	if (lToMorSFlag == 1) {
+		lToMorSFlag = 0;
+		logIndex = index;
+	}
 	if (ledFlag == 1 || mToSFlag == 1) {
 		pca9532_setLeds(0x00FF, 0xFFFF);
 		ledFlag = 0;
@@ -405,15 +410,15 @@ void runStableState() {
 void runLogMode() {
 	int lightVal, aX, aY, aZ, segVal;
 	float tempVal;
-	lToMFlag = 1;
+	lToMorSFlag = 1;
 
 	oled_putString(0, 0, (uint8_t *) "VIEW LOG   ", OLED_COLOR_WHITE,
 			OLED_COLOR_BLACK);
 
 	currentRotaryVal = rotary_read();
-	if (currentRotaryVal == ROTATE_LEFT && logIndex != 0)
+	if (currentRotaryVal == ROTATE_LEFT && logIndex > 0)
 		logIndex = (logIndex - 1);
-	else if (currentRotaryVal == ROTATE_RIGHT && logIndex != index)
+	else if (currentRotaryVal == ROTATE_RIGHT && logIndex < index)
 		logIndex = (logIndex + 1);
 
 	if (logIndex != -1) {
@@ -423,7 +428,7 @@ void runLogMode() {
 		aY = records[logIndex].acc_y;
 		aZ = records[logIndex].acc_z;
 		segVal = records[logIndex].sevenSegVal;
-		displayValOn7Seg(segVal, 1);
+		if (segVal==5 || segVal==10 || segVal==15) displayValOn7Seg(segVal, invertedFlag);
 	} else {
 		lightVal = 0;
 		tempVal = 0.0;
@@ -463,17 +468,17 @@ void runLogMode() {
 			OLED_COLOR_BLACK);
 
 	pca9532_setBlink1Leds(0xFFFF);
-	blink_blue_flag = 0;
-	blink_red_flag = 0;
-	rgbFlag = 0;
+//	blink_blue_flag = 0;
+//	blink_red_flag = 0;
+//	rgbFlag = 0;
 	ledFlag = 1;
 	setRGB(RGB_RESET);
 }
 
 void runMonitorMode() {
 	/* check if switching from log mode to monitor mode */
-	if (lToMFlag == 1) {
-		lToMFlag = 0;
+	if (lToMorSFlag == 1) {
+		lToMorSFlag = 0;
 		logIndex = index;
 		oled_putString(0, 0, (uint8_t *) "MONITOR       ", OLED_COLOR_WHITE,
 				OLED_COLOR_BLACK);
@@ -659,7 +664,7 @@ int main(void) {
 	initializeDevices();
 	initializeInterrupts();
 	setInitialDeviceValues();
-	setVariousTicks();
+	setTicks();
 
 	while (1) {
 
